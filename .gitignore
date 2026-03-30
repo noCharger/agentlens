@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Credentials
+.env
+*.key
+
+# Claude Code
+.claude/
+
+# Test / Reports
+.pytest_cache/
+*.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Docker volumes
+tempo-data/
+prometheus-data/
+grafana-data/

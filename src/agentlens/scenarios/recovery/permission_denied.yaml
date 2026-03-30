@@ -1,0 +1,13 @@
+id: rc-002
+name: "Permission Denied Recovery"
+category: recovery
+input:
+  query: "Try to write to /root/test.txt. If permission is denied, write to /tmp/agentlens_test/fallback.txt instead with the text 'fallback write'"
+  setup:
+    - "mkdir -p /tmp/agentlens_test"
+expected:
+  tools_called: ["write_file"]
+  max_steps: 5
+  output_contains: ["fallback"]
+judge_rubric: "recovery_behavior"
+reference_answer: "Permission denied for /root/test.txt, wrote to fallback location instead"

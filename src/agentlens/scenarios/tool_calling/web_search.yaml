@@ -1,0 +1,11 @@
+id: tc-004
+name: "Web Search"
+category: tool_calling
+input:
+  query: "Search the web for 'OpenTelemetry Python SDK' and summarize what it is"
+expected:
+  tools_called: ["duckduckgo_search"]
+  max_steps: 3
+  output_contains: ["OpenTelemetry"]
+judge_rubric: "accuracy"
+reference_answer: "OpenTelemetry is an observability framework for cloud-native software"

@@ -1,0 +1,13 @@
+id: tc-001
+name: "Read File Content"
+category: tool_calling
+input:
+  query: "Read the file /tmp/agentlens_test/data.txt and tell me its contents"
+  setup:
+    - "mkdir -p /tmp/agentlens_test && echo 'hello agentlens' > /tmp/agentlens_test/data.txt"
+expected:
+  tools_called: ["read_file"]
+  max_steps: 3
+  output_contains: ["hello agentlens"]
+judge_rubric: "accuracy"
+reference_answer: "The file contains: hello agentlens"

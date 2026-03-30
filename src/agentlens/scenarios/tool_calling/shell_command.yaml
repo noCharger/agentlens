@@ -1,0 +1,13 @@
+id: tc-002
+name: "Shell Command Execution"
+category: tool_calling
+input:
+  query: "Use the shell to list files in /tmp/agentlens_test and tell me what files are there"
+  setup:
+    - "mkdir -p /tmp/agentlens_test && touch /tmp/agentlens_test/a.py /tmp/agentlens_test/b.py"
+expected:
+  tools_called: ["terminal"]
+  max_steps: 3
+  output_contains: ["a.py", "b.py"]
+judge_rubric: "accuracy"
+reference_answer: "The directory contains a.py and b.py"

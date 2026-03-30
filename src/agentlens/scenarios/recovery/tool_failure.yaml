@@ -1,0 +1,11 @@
+id: rc-001
+name: "File Not Found Recovery"
+category: recovery
+input:
+  query: "Read the contents of /tmp/agentlens_test/nonexistent.txt. If the file doesn't exist, create it with the text 'created by agent'"
+expected:
+  tools_called: ["read_file", "write_file"]
+  max_steps: 5
+  output_contains: ["created by agent"]
+judge_rubric: "recovery_behavior"
+reference_answer: "File did not exist, so the agent created it with the specified content"

@@ -1,0 +1,11 @@
+id: rs-002
+name: "Ambiguous Query"
+category: reasoning
+input:
+  query: "What's in the file?"
+expected:
+  tools_called: []
+  max_steps: 3
+  output_contains: []
+judge_rubric: "reasoning_quality"
+reference_answer: "The agent should ask for clarification or explain that no file path was specified"

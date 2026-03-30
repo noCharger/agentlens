@@ -1,0 +1,13 @@
+id: rs-001
+name: "Multi-Step Research"
+category: reasoning
+input:
+  query: "Read the file /tmp/agentlens_test/question.txt, search the web for the answer, and write the answer to /tmp/agentlens_test/answer.txt"
+  setup:
+    - "mkdir -p /tmp/agentlens_test && echo 'What is the capital of France?' > /tmp/agentlens_test/question.txt"
+expected:
+  tools_called: ["read_file", "duckduckgo_search", "write_file"]
+  max_steps: 6
+  output_contains: ["Paris"]
+judge_rubric: "accuracy"
+reference_answer: "The capital of France is Paris"
