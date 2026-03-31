@@ -1,12 +1,12 @@
-"""Level 1 evaluator: tool selection and parameter validation.
+"""Level 1 evaluator: tool selection validation.
 
-Reads Tool spans to verify:
-- Correct tools were called (by name)
-- Tool parameters match expected schema
+Reads TOOL spans from OpenInference to verify the agent called expected tools.
+Supports checking both which tools and how many times (with ordered count).
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 from opentelemetry.sdk.trace import ReadableSpan
@@ -22,30 +22,45 @@ class ToolUsageResult:
 
 
 def extract_tool_names(spans: list[ReadableSpan]) -> list[str]:
-    """Extract tool names from OpenInference Tool spans."""
-    tool_names = []
+    """Extract ordered tool names from OpenInference TOOL spans."""
+    tool_spans = []
     for span in spans:
         attrs = dict(span.attributes or {})
-        # OpenInference uses "tool.name" or the span name for tool calls
-        tool_name = attrs.get("tool.name") or attrs.get("tool_call.function.name")
-        if tool_name:
-            tool_names.append(str(tool_name))
+        if attrs.get("openinference.span.kind") == "TOOL":
+            name = attrs.get("tool.name")
+            if name:
+                tool_spans.append((span.start_time or 0, str(name)))
+        elif attrs.get("tool.name") or attrs.get("tool_call.function.name"):
+            name = attrs.get("tool.name") or attrs.get("tool_call.function.name")
+            tool_spans.append((span.start_time or 0, str(name)))
         elif span.name and span.name.startswith("Tool:"):
-            tool_names.append(span.name.removeprefix("Tool:").strip())
-    return tool_names
+            tool_spans.append((span.start_time or 0, span.name.removeprefix("Tool:").strip()))
+
+    tool_spans.sort(key=lambda t: t[0])
+    return [name for _, name in tool_spans]
 
 
 def evaluate_tool_usage(
     spans: list[ReadableSpan],
     expected_tools: list[str],
 ) -> ToolUsageResult:
+    """Evaluate tool usage with count-aware comparison.
+
+    expected_tools is treated as a multiset: ["write_file", "write_file"]
+    means write_file must be called at least twice.
+    """
     actual_tools = extract_tool_names(spans)
 
-    expected_set = set(expected_tools)
-    actual_set = set(actual_tools)
+    expected_counts = Counter(expected_tools)
+    actual_counts = Counter(actual_tools)
 
-    missing = sorted(expected_set - actual_set)
-    unexpected = sorted(actual_set - expected_set)
+    missing = []
+    for tool, count in expected_counts.items():
+        actual_count = actual_counts.get(tool, 0)
+        if actual_count < count:
+            missing.extend([tool] * (count - actual_count))
+
+    unexpected = sorted(set(actual_counts) - set(expected_counts))
     passed = len(missing) == 0
 
     return ToolUsageResult(

@@ -1,9 +1,7 @@
 """Level 1 evaluator: trajectory validation.
 
-Reads agent.step spans to verify:
-- Step count within budget
-- No infinite loops (repeated identical actions)
-- Token usage within budget
+Counts ReAct loop iterations (AGENT spans from OpenInference),
+detects loops via repeated tool calls, and checks token budgets.
 """
 
 from __future__ import annotations
@@ -26,24 +24,45 @@ class TrajectoryResult:
 
 
 def count_steps(spans: list[ReadableSpan]) -> int:
+    """Count ReAct loop iterations.
+
+    OpenInference emits one AGENT span per LangGraph node invocation.
+    Each `agent` node call = one ReAct step (think → act → observe).
+    Falls back to counting our custom `agent.step` spans if present.
+    """
+    agent_steps = sum(
+        1 for s in spans
+        if dict(s.attributes or {}).get("openinference.span.kind") == "AGENT"
+    )
+    if agent_steps > 0:
+        return agent_steps
+
     return sum(1 for s in spans if s.name == "agent.step")
 
 
 def detect_loop(spans: list[ReadableSpan], max_repeats: int = 3) -> bool:
-    """Detect if the same action is repeated consecutively too many times."""
+    """Detect repeated identical tool calls (indicates stuck agent).
+
+    Checks both OpenInference TOOL spans and custom agent.step spans.
+    """
     actions = []
     for span in spans:
-        if span.name == "agent.step":
-            attrs = dict(span.attributes or {})
+        attrs = dict(span.attributes or {})
+        if attrs.get("openinference.span.kind") == "TOOL":
+            tool = attrs.get("tool.name", "")
+            params = attrs.get("input.value", "")
+            actions.append(f"{tool}:{params}")
+        elif span.name == "agent.step":
             action = attrs.get("step.action", "")
-            actions.append(str(action))
+            if action:
+                actions.append(str(action))
 
     if len(actions) < max_repeats:
         return False
 
     for i in range(len(actions) - max_repeats + 1):
-        window = actions[i : i + max_repeats]
-        if len(set(window)) == 1 and window[0] != "":
+        window = actions[i: i + max_repeats]
+        if len(set(window)) == 1 and window[0]:
             return True
     return False
 
@@ -54,10 +73,11 @@ def sum_tokens(spans: list[ReadableSpan]) -> tuple[int, int]:
     completion_total = 0
     for span in spans:
         attrs = dict(span.attributes or {})
-        # OpenInference token attributes
         pt = attrs.get("llm.token_count.prompt") or attrs.get("llm.usage.prompt_tokens") or 0
         ct = (
-            attrs.get("llm.token_count.completion") or attrs.get("llm.usage.completion_tokens") or 0
+            attrs.get("llm.token_count.completion")
+            or attrs.get("llm.usage.completion_tokens")
+            or 0
         )
         prompt_total += int(pt)
         completion_total += int(ct)
