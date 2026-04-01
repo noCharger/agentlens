@@ -10,14 +10,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider, ReadableSpan
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, BatchSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
-from agentlens.eval.scenarios import Scenario, load_scenarios_from_dir
+from agentlens.eval.scenarios import Scenario, load_runtime_scenarios
 from agentlens.eval.level1_deterministic.tool_usage import ToolUsageResult, evaluate_tool_usage
 from agentlens.eval.level1_deterministic.output_format import (
     OutputFormatResult,
@@ -114,8 +113,37 @@ class EvalResult:
     error: str | None = None
 
     @property
+    def judge_overall_score(self) -> float | None:
+        scores = [score for score in self.level2_scores.values() if score >= 0]
+        if not scores:
+            return None
+        return sum(scores) / len(scores)
+
+    def _llm_judge_level1_passed(self) -> bool:
+        has_explicit_expectations = bool(
+            self.scenario.expected.tools_called or self.scenario.expected.output_contains
+        )
+        if has_explicit_expectations:
+            return self.level1.passed
+        return self.level1.trajectory.passed
+
+    @property
     def passed(self) -> bool:
-        return self.level1.passed and self.error is None
+        if self.error is not None:
+            return False
+
+        if self.scenario.evaluation_mode == "llm_judge":
+            score = self.judge_overall_score
+            return (
+                self._llm_judge_level1_passed()
+                and score is not None
+                and score >= self.scenario.judge_threshold
+            )
+
+        if self.scenario.evaluation_mode == "external":
+            return False
+
+        return self.level1.passed
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +254,19 @@ def execute_and_eval(
     with_level2: bool = False,
     rate_limit_delay: float = 6.0,
 ) -> EvalResult:
-    from agentlens.agents.factory import create_agent
+    if scenario.evaluation_mode == "external":
+        return _error_result(
+            scenario,
+            "This scenario requires an external benchmark harness and cannot be scored "
+            "by the built-in AgentLens runner.",
+        )
+
+    if scenario.evaluation_mode == "llm_judge" and not with_level2:
+        return _error_result(
+            scenario,
+            "This scenario requires LLM-as-Judge scoring. Re-run with --level2 enabled.",
+        )
+
     from agentlens.observability.instrument import instrument_langchain
 
     if scenario.setup_commands:
@@ -258,6 +298,8 @@ def execute_and_eval(
         with tracer.start_as_current_span("agent.run") as span:
             span.set_attribute("agent.output", content)
             span.set_attribute("agent.scenario_id", scenario.id)
+            if scenario.benchmark:
+                span.set_attribute("agent.benchmark", scenario.benchmark)
         provider.force_flush()
 
     from agentlens.observability.instrument import uninstrument_langchain
@@ -325,6 +367,7 @@ def _run_level2(eval_result: EvalResult, spans, scenario, settings) -> None:
             query=scenario.input_query,
             reference_answer=scenario.reference_answer,
             rubric_name=scenario.judge_rubric,
+            rubric_text=scenario.judge_rubric_text,
         )
         eval_result.level2_scores = {s.dimension: s.score for s in judge_result.scores}
     except Exception:
@@ -338,7 +381,11 @@ def _record_metrics_best_effort(
         from agentlens.observability.metrics import AgentMetrics
 
         m = AgentMetrics()
-        m.record_agent_run(success=result.passed, scenario_id=scenario.id)
+        m.record_agent_run(
+            success=result.passed,
+            scenario_id=scenario.id,
+            benchmark=scenario.benchmark,
+        )
 
         for span in spans:
             attrs = dict(span.attributes or {})
@@ -372,5 +419,11 @@ def _record_metrics_best_effort(
         pass
 
 
-def load_and_summarize(scenarios_dir: Path) -> list[Scenario]:
-    return load_scenarios_from_dir(scenarios_dir)
+def load_and_summarize(
+    scenarios_dir: Path,
+    benchmark_data_root: Path | None = None,
+) -> list[Scenario]:
+    return load_runtime_scenarios(
+        scenarios_dir,
+        benchmark_data_root=benchmark_data_root,
+    )

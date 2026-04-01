@@ -22,6 +22,17 @@ def _get_metric_value(reader: InMemoryMetricReader, name: str) -> int | float | 
     return None
 
 
+def _get_metric_attributes(reader: InMemoryMetricReader, name: str) -> dict | None:
+    data = reader.get_metrics_data()
+    for resource_metric in data.resource_metrics:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                if metric.name == name:
+                    for dp in metric.data.data_points:
+                        return dict(dp.attributes)
+    return None
+
+
 def test_record_agent_run_success():
     m, reader = _make_metrics()
     m.record_agent_run(success=True, scenario_id="tc-001")
@@ -40,6 +51,14 @@ def test_record_agent_run_failure():
     success = _get_metric_value(reader, "agent.runs.success")
     assert total == 1
     assert success is None  # counter never incremented
+
+
+def test_record_agent_run_includes_benchmark_attribute():
+    m, reader = _make_metrics()
+    m.record_agent_run(success=True, scenario_id="tc-001", benchmark="swe-bench-pro")
+
+    attrs = _get_metric_attributes(reader, "agent.runs.total")
+    assert attrs == {"scenario_id": "tc-001", "benchmark": "swe-bench-pro"}
 
 
 def test_record_tool_call():

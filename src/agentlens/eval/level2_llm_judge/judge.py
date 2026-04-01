@@ -1,14 +1,14 @@
-"""LLM-as-Judge evaluator using Gemini Flash-Lite."""
+"""LLM-as-Judge evaluator using the configured chat model."""
 
 from __future__ import annotations
 
 import json
 
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from opentelemetry.sdk.trace import ReadableSpan
 
 from agentlens.config import AgentLensSettings
+from agentlens.llms import create_chat_llm
 from agentlens.eval.level2_llm_judge.rubrics import (
     JudgeScore,
     JudgeResult,
@@ -62,25 +62,23 @@ def _parse_judge_response(text: str, dimension: str) -> JudgeScore:
     )
 
 
-def create_judge_llm(settings: AgentLensSettings) -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(
-        model=settings.judge_model,
-        google_api_key=settings.google_api_key,
-        temperature=0.0,
-    )
+def create_judge_llm(settings: AgentLensSettings):
+    return create_chat_llm(settings, settings.judge_model, temperature=0.0)
 
 
 def judge_scenario(
-    llm: ChatGoogleGenerativeAI,
+    llm,
     spans: list[ReadableSpan],
     query: str,
     reference_answer: str,
     rubric_name: str,
+    rubric_text: str = "",
 ) -> JudgeResult:
     """Run LLM-as-Judge on a single scenario for the specified rubric."""
-    rubric_text = RUBRIC_DEFINITIONS.get(rubric_name, "")
-    if not rubric_text:
+    resolved_rubric_text = rubric_text or RUBRIC_DEFINITIONS.get(rubric_name, "")
+    if not resolved_rubric_text:
         return JudgeResult(scores=[])
+    dimension = rubric_name or "custom"
 
     trajectory = _format_trajectory(spans)
     final_answer = _extract_final_answer(spans)
@@ -90,8 +88,8 @@ def judge_scenario(
         trajectory=trajectory,
         final_answer=final_answer,
         reference_answer=reference_answer,
-        dimension=rubric_name,
-        rubric_text=rubric_text,
+        dimension=dimension,
+        rubric_text=resolved_rubric_text,
     )
 
     messages = [
@@ -100,5 +98,5 @@ def judge_scenario(
     ]
 
     response = llm.invoke(messages)
-    score = _parse_judge_response(response.content, rubric_name)
+    score = _parse_judge_response(response.content, dimension)
     return JudgeResult(scores=[score])

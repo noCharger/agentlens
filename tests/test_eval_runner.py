@@ -1,11 +1,22 @@
 """Tests for the eval runner orchestration logic."""
 
+from types import SimpleNamespace
+
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from agentlens.eval.scenarios import Scenario, ExpectedResult
-from agentlens.eval.runner import run_level1_eval, evaluate_scenario
+from agentlens.eval.scenarios import ExpectedResult, Scenario
+from agentlens.eval.runner import (
+    EvalResult,
+    Level1Result,
+    evaluate_scenario,
+    execute_and_eval,
+    run_level1_eval,
+)
+from agentlens.eval.level1_deterministic.output_format import OutputFormatResult
+from agentlens.eval.level1_deterministic.tool_usage import ToolUsageResult
+from agentlens.eval.level1_deterministic.trajectory import TrajectoryResult
 
 
 def _make_scenario(**overrides) -> Scenario:
@@ -96,3 +107,56 @@ def test_evaluate_scenario_no_expected_tools():
     spans = _make_spans({"name": "agent.run", "attributes": {"agent.output": "anything"}})
     result = evaluate_scenario(scenario, spans)
     assert result.passed is True
+
+
+def test_eval_result_llm_judge_passes_with_threshold():
+    scenario = _make_scenario(
+        evaluation_mode="llm_judge",
+        expected=ExpectedResult(tools_called=[], max_steps=5, output_contains=[]),
+        judge_threshold=4.0,
+    )
+    result = EvalResult(
+        scenario=scenario,
+        level1=Level1Result(
+            tool_usage=ToolUsageResult(True, [], [], [], []),
+            output_format=OutputFormatResult(True, "ok", [], []),
+            trajectory=TrajectoryResult(True, 1, 5, False, 0, 0, None, []),
+        ),
+        level2_scores={"custom": 4.5},
+    )
+    assert result.passed is True
+
+
+def test_eval_result_llm_judge_fails_below_threshold():
+    scenario = _make_scenario(
+        evaluation_mode="llm_judge",
+        expected=ExpectedResult(tools_called=[], max_steps=5, output_contains=[]),
+        judge_threshold=4.0,
+    )
+    result = EvalResult(
+        scenario=scenario,
+        level1=Level1Result(
+            tool_usage=ToolUsageResult(True, [], [], [], []),
+            output_format=OutputFormatResult(True, "ok", [], []),
+            trajectory=TrajectoryResult(True, 1, 5, False, 0, 0, None, []),
+        ),
+        level2_scores={"custom": 3.0},
+    )
+    assert result.passed is False
+
+
+def test_execute_and_eval_external_mode_short_circuits():
+    scenario = _make_scenario(evaluation_mode="external")
+    result = execute_and_eval(scenario, settings=SimpleNamespace())
+    assert result.passed is False
+    assert "external benchmark harness" in (result.error or "")
+
+
+def test_execute_and_eval_llm_judge_requires_level2():
+    scenario = _make_scenario(
+        evaluation_mode="llm_judge",
+        expected=ExpectedResult(tools_called=[], max_steps=5, output_contains=[]),
+    )
+    result = execute_and_eval(scenario, settings=SimpleNamespace(), with_level2=False)
+    assert result.passed is False
+    assert "requires LLM-as-Judge" in (result.error or "")

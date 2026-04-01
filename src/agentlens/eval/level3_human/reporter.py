@@ -7,6 +7,7 @@ from pathlib import Path
 
 from jinja2 import Template
 
+from agentlens.eval.benchmarks import UNASSIGNED_BENCHMARK, summarize_results_by_benchmark
 from agentlens.eval.runner import EvalResult
 
 REPORT_TEMPLATE = Template("""\
@@ -58,13 +59,44 @@ REPORT_TEMPLATE = Template("""\
     <h3>Pass Rate</h3>
     <div class="value">{{ pass_rate }}%</div>
   </div>
+  <div class="card">
+    <h3>Benchmarks</h3>
+    <div class="value">{{ benchmarks_covered }}</div>
+  </div>
 </div>
+
+{% if benchmark_summaries %}
+<h2>Benchmark Summary</h2>
+<table>
+<thead>
+  <tr>
+    <th>Benchmark</th>
+    <th>Scenarios</th>
+    <th>Passed</th>
+    <th>Failed</th>
+    <th>Pass Rate</th>
+  </tr>
+</thead>
+<tbody>
+{% for summary in benchmark_summaries %}
+  <tr>
+    <td>{{ summary.name }}</td>
+    <td>{{ summary.total }}</td>
+    <td>{{ summary.passed }}</td>
+    <td>{{ summary.failed }}</td>
+    <td>{{ summary.pass_rate }}%</td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
 
 <table>
 <thead>
   <tr>
     <th>ID</th>
     <th>Name</th>
+    <th>Benchmark</th>
     <th>Category</th>
     <th>Tool Usage</th>
     <th>Output</th>
@@ -78,6 +110,7 @@ REPORT_TEMPLATE = Template("""\
   <tr>
     <td>{{ r.scenario.id }}</td>
     <td>{{ r.scenario.name }}</td>
+    <td>{{ r.scenario.benchmark_name or 'Unassigned' }}</td>
     <td>{{ r.scenario.category }}</td>
     <td><span class="badge {{ 'badge-pass' if r.level1.tool_usage.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.tool_usage.passed else 'FAIL' }}</span></td>
     <td><span class="badge {{ 'badge-pass' if r.level1.output_format.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.output_format.passed else 'FAIL' }}</span></td>
@@ -87,6 +120,7 @@ REPORT_TEMPLATE = Template("""\
       <details>
         <summary>Details</summary>
         <div class="details-content">
+          <p><strong>Benchmark:</strong> {{ r.scenario.benchmark_name or 'Unassigned' }}</p>
           <p><strong>Query:</strong> {{ r.scenario.input_query }}</p>
           <p><strong>Expected tools:</strong> {{ r.level1.tool_usage.expected_tools | join(', ') }}</p>
           <p><strong>Actual tools:</strong> {{ r.level1.tool_usage.actual_tools | join(', ') or 'none' }}</p>
@@ -130,6 +164,11 @@ def generate_report(results: list[EvalResult], output_path: Path | None = None) 
     passed = sum(1 for r in results if r.passed)
     failed = total - passed
     pass_rate = round(passed / total * 100, 1) if total > 0 else 0
+    benchmark_summaries = [
+        summary
+        for summary in summarize_results_by_benchmark(results)
+        if summary.slug != UNASSIGNED_BENCHMARK
+    ]
 
     html = REPORT_TEMPLATE.render(
         generated_at=datetime.now().isoformat(timespec="seconds"),
@@ -137,6 +176,8 @@ def generate_report(results: list[EvalResult], output_path: Path | None = None) 
         passed=passed,
         failed=failed,
         pass_rate=pass_rate,
+        benchmarks_covered=len(benchmark_summaries),
+        benchmark_summaries=benchmark_summaries,
         results=results,
     )
 

@@ -17,6 +17,8 @@ build/
 # Test / Reports
 .pytest_cache/
 *.html
+data/benchmarks/
+src/agentlens/scenarios/benchmarks/
 
 # IDE
 .idea/

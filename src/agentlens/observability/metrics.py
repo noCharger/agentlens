@@ -52,8 +52,17 @@ class AgentMetrics:
             description="Number of completion tokens per LLM call",
         )
 
-    def record_agent_run(self, success: bool, scenario_id: str = "") -> None:
-        attrs = {"scenario_id": scenario_id} if scenario_id else {}
+    def record_agent_run(
+        self,
+        success: bool,
+        scenario_id: str = "",
+        benchmark: str = "",
+    ) -> None:
+        attrs = {}
+        if scenario_id:
+            attrs["scenario_id"] = scenario_id
+        if benchmark:
+            attrs["benchmark"] = benchmark
         self.agent_runs_total.add(1, attrs)
         if success:
             self.agent_runs_success.add(1, attrs)

@@ -11,12 +11,17 @@ from agentlens.eval.level1_deterministic.trajectory import TrajectoryResult
 from agentlens.eval.level3_human.reporter import generate_report
 
 
-def _make_eval_result(passed: bool, scenario_id: str = "test-001") -> EvalResult:
+def _make_eval_result(
+    passed: bool,
+    scenario_id: str = "test-001",
+    benchmark: str = "",
+) -> EvalResult:
     return EvalResult(
         scenario=Scenario(
             id=scenario_id,
             name=f"Test {scenario_id}",
             category="tool_calling",
+            benchmark=benchmark,
             input="test query",
             setup=[],
             expected=ExpectedResult(tools_called=["read_file"], max_steps=5, output_contains=["hello"]),
@@ -93,3 +98,16 @@ def test_generate_report_with_error():
     result.error = "Connection timeout"
     html = generate_report([result])
     assert "Connection timeout" in html
+
+
+def test_generate_report_includes_benchmark_summary():
+    results = [
+        _make_eval_result(True, "pass-1", benchmark="SWE Bench Pro"),
+        _make_eval_result(False, "fail-1", benchmark="Toolathlon"),
+    ]
+
+    html = generate_report(results)
+
+    assert "Benchmark Summary" in html
+    assert "SWE Bench Pro" in html
+    assert "Toolathlon" in html

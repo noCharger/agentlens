@@ -1,6 +1,6 @@
 """Tests for Level 2 LLM-as-Judge (using mocked LLM responses)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -170,3 +170,24 @@ def test_judge_scenario_unknown_rubric():
     )
     assert len(result.scores) == 0
     mock_llm.invoke.assert_not_called()
+
+
+def test_judge_scenario_with_custom_rubric_text():
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = AIMessage(
+        content='{"dimension": "custom", "score": 4, "explanation": "solid"}'
+    )
+
+    result = judge_scenario(
+        llm=mock_llm,
+        spans=[],
+        query="Do the thing",
+        reference_answer="",
+        rubric_name="",
+        rubric_text="Score whether the task was completed cleanly.",
+    )
+
+    assert len(result.scores) == 1
+    assert result.scores[0].score == 4
+    assert result.scores[0].dimension == "custom"
+    mock_llm.invoke.assert_called_once()

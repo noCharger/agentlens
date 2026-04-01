@@ -1,7 +1,7 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 
 from agentlens.config import AgentLensSettings
+from agentlens.llms import create_chat_llm
 
 
 TOOL_PRESETS: dict[str, list[str]] = {
@@ -42,10 +42,7 @@ def create_agent(settings: AgentLensSettings, preset: str = "full"):
     if tool_names is None:
         raise ValueError(f"Unknown preset: {preset}. Available: {list(TOOL_PRESETS.keys())}")
 
-    llm = ChatGoogleGenerativeAI(
-        model=settings.agent_model,
-        google_api_key=settings.google_api_key,
-    )
+    llm = create_chat_llm(settings, settings.agent_model)
     tools = _build_tools(tool_names)
     return create_react_agent(llm, tools)
 

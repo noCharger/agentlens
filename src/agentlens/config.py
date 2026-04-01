@@ -1,14 +1,25 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+from agentlens.model_selection import DEFAULT_AGENT_MODEL, DEFAULT_JUDGE_MODEL
+
 
 class AgentLensSettings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
-    google_api_key: str = Field(description="Google AI Studio API key")
-    agent_model: str = Field(default="gemini-2.5-flash", description="Model for agent execution")
+    google_api_key: str | None = Field(default=None, description="Google AI Studio API key")
+    deepseek_api_key: str | None = Field(default=None, description="DeepSeek API key")
+    deepseek_api_base: str = Field(
+        default="https://api.deepseek.com",
+        description="DeepSeek API base URL",
+    )
+    agent_model: str = Field(
+        default=DEFAULT_AGENT_MODEL,
+        description="Agent model selection, for example gemini:gemini-2.5-flash or deepseek:deepseek-chat",
+    )
     judge_model: str = Field(
-        default="gemini-2.5-flash-lite", description="Model for LLM-as-Judge evaluation"
+        default=DEFAULT_JUDGE_MODEL,
+        description="Judge model selection, for example gemini:gemini-2.5-flash-lite or deepseek:deepseek-chat",
     )
     otel_exporter_otlp_endpoint: str = Field(
         default="http://localhost:4317", description="OTLP gRPC endpoint"
