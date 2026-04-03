@@ -29,3 +29,17 @@ src/agentlens/scenarios/benchmarks/
 tempo-data/
 prometheus-data/
 grafana-data/
+
+# AgentLens local runtime artifacts
+.agentlens-platform/
+.agentlens-platform*/
+data/datasets/
+*.sqlite
+*.sqlite3
+*.db
+
+# Enterprise/private overlays (must stay out of OSS)
+enterprise/
+infra/enterprise/
+src/agentlens/core/enterprise/
+*.license

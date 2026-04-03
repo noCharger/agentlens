@@ -10,46 +10,60 @@ It currently covers four main areas:
 - Multi-level evaluation with deterministic checks, LLM-as-Judge, and HTML reports
 - OpenTelemetry traces and metrics
 
-The repository now uses a runtime benchmark-loading architecture:
+## OSS Scope
 
-- Handwritten scenarios live under `src/agentlens/scenarios/`
-- Raw benchmark files live under `data/benchmarks/<slug>/`
-- Benchmark tasks are loaded dynamically at runtime instead of being persisted as generated YAML
+Included in OSS:
+
+- Local/CI SDK + CLI
+- Runtime benchmark adapters and dataset build pipeline
+- Eval runner (`deterministic` + `llm_judge`) and HTML reports
+- OpenTelemetry instrumentation and basic local monitoring primitives
+- Local core records (`src/agentlens/core/`): file/sqlite persistence, API/CLI inspection, alert-rule evaluation
+
+Out of OSS (enterprise/private):
+
+- Multi-tenant control plane and workspace isolation
+- Enterprise identity stack (SSO, SCIM, fine-grained RBAC/ABAC)
+- Compliance orchestration (SOC2, HIPAA, GDPR, retention/legal hold, compliance reporting)
+- Managed on-prem packaging internals, data-residency policy operations, commercial SLA/billing/support tooling
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    A["src/agentlens/scenarios/*.yaml<br/>static scenarios"] --> C["load_runtime_scenarios"]
-    B["data/benchmarks/<slug>/*<br/>raw benchmark files"] --> D["benchmark adapters<br/>eval/importers.py"]
+flowchart LR
+    A["Static scenarios<br/>src/agentlens/scenarios/*.yaml"] --> C["Dataset builder<br/>agentlens.dataset"]
+    B["Raw benchmarks<br/>data/benchmarks/<slug>/"] --> D["Runtime benchmark importers<br/>agentlens.eval.importers"]
     D --> C
-    C --> E["execute_and_eval"]
-    E --> F["L1 deterministic<br/>tool / output / trajectory"]
-    E --> G["L2 llm_judge<br/>rubric + reference"]
-    E --> H["L3 report<br/>HTML summary"]
-    E --> I["OTEL traces / metrics"]
+    C --> E["Eval runner<br/>agentlens.eval"]
+    E --> F["L1 deterministic checks"]
+    E --> G["L2 llm_judge checks"]
+    E --> H["L3 HTML report"]
+    E --> I["OTEL traces and metrics"]
+    E --> J["Core records<br/>agentlens.core"]
+    I --> J
+    J --> K["Experiment and monitor views"]
+    K --> L["Annotation tasks"]
+    K --> M["Alert rules and events"]
+    M --> C
 ```
 
-Core modules:
+Core reliability principles (OSS core):
 
-- `src/agentlens/agents/factory.py`
-  Creates the runtime agent and tool preset.
-- `src/agentlens/model_selection.py`
-  Resolves `provider:model` selections such as `gemini:gemini-2.5-flash` and `deepseek:deepseek-chat`.
-- `src/agentlens/llms.py`
-  Builds provider-specific chat models for Gemini and DeepSeek.
-- `src/agentlens/deepseek.py`
-  Runs DeepSeek-specific preflight checks, including balance validation.
-- `src/agentlens/eval/scenarios.py`
-  Defines the `Scenario` model and merges static YAML scenarios with dynamically discovered benchmark tasks.
-- `src/agentlens/eval/importers.py`
-  Maps parquet / jsonl / manifest / task-directory benchmark inputs into runtime scenarios.
-- `src/agentlens/eval/runner.py`
-  Executes the agent, captures spans, performs evaluation, and handles retries / external benchmark behavior.
-- `src/agentlens/eval/level3_human/reporter.py`
-  Generates the HTML report.
-- `src/agentlens/observability/`
-  Initializes telemetry and records metrics.
+- Stateless API/service handlers with persistent state in file/sqlite repositories
+- Idempotent snapshot writes (`idempotency_key`) for retry-safe ingestion
+- Bounded pagination (`limit`/`offset`) to control memory and backpressure
+- Durable and concurrent SQLite behavior (`WAL`, `busy_timeout`, retry with backoff)
+- Deterministic audit and alert event IDs to prevent duplicates during retries
+
+Core packages and responsibilities:
+
+- `src/agentlens/agents/`: runtime agent creation and tool presets
+- `src/agentlens/model_selection.py` + `src/agentlens/llms.py`: provider/model resolution and model client construction
+- `src/agentlens/eval/`: runtime scenario loading, benchmark adapters, eval runner, L1/L2/L3 evaluation outputs
+- `src/agentlens/dataset/`: immutable dataset-version build and dataset-item to runtime-scenario conversion
+- `src/agentlens/core/`: local closed-loop records, file/sqlite repositories, local API/CLI, alert evaluation/events
+- `src/agentlens/observability/`: OTEL instrumentation, spans, and metrics
+- `src/agentlens/scenarios/`: handwritten static YAML scenarios
 
 ## Repository Layout
 
@@ -57,6 +71,7 @@ Core modules:
 agentlens/
 ├── src/agentlens/
 │   ├── agents/
+│   ├── scenarios/               # handwritten YAML scenarios
 │   ├── eval/
 │   │   ├── level1_deterministic/
 │   │   ├── level2_llm_judge/
@@ -65,13 +80,12 @@ agentlens/
 │   │   ├── importers.py
 │   │   ├── runner.py
 │   │   └── scenarios.py
-│   ├── observability/
-│   └── scenarios/
-│       ├── reasoning/
-│       ├── recovery/
-│       └── tool_calling/
-├── data/benchmarks/
-│   └── <slug>/
+│   ├── dataset/                 # dataset-version pipeline
+│   ├── core/                    # local closed-loop records and APIs
+│   └── observability/           # traces and metrics
+├── data/
+│   └── benchmarks/<slug>/       # raw benchmark files (runtime loaded)
+├── infra/
 ├── tests/
 └── pyproject.toml
 ```
@@ -202,6 +216,9 @@ Show CLI help:
 ```bash
 ./.venv/bin/python -m agentlens.eval --help
 ./.venv/bin/python -m agentlens.eval.importers --help
+./.venv/bin/python -m agentlens.dataset --help
+./.venv/bin/python -m agentlens.core --help
+./.venv/bin/python -m agentlens.core.api --help
 ```
 
 ## Running Built-In YAML Scenarios
@@ -245,6 +262,40 @@ Generate an HTML report:
 - Put raw benchmark files under `data/benchmarks/<slug>/`
 - AgentLens discovers and loads them dynamically at runtime
 - Generated benchmark YAML files are no longer part of the workflow
+- Eval now supports a dataset-version execution path for reproducible runs
+
+### Two-Pipeline Workflow
+
+Build a dataset version from local scenarios and benchmark data:
+
+```bash
+./.venv/bin/python -m agentlens.dataset \
+  --benchmark gdpval-aa \
+  --name gdpval-regression \
+  --output data/datasets/gdpval-regression-v1.json
+```
+
+Run eval directly from a dataset version file:
+
+```bash
+./.venv/bin/python -m agentlens.eval \
+  --dataset-version-file data/datasets/gdpval-regression-v1.json \
+  --level2 \
+  --output gdpval.html
+```
+
+Run eval from a stored dataset version id:
+
+```bash
+./.venv/bin/python -m agentlens.eval \
+  --dataset-version-id <dataset_version_id> \
+  --platform-store .agentlens-platform \
+  --platform-project-slug qa-project
+```
+
+Compatibility mode remains available: `--benchmark` on `agentlens.eval` still works, and the runner builds an in-memory dataset version before execution.
+When `--platform-store` or `--platform-sqlite` is set, this compatibility path uses a deterministic dataset fingerprint and reuses the same dataset version id instead of generating duplicates.
+(`--platform-*` flags are currently kept for backward compatibility even though the OSS module namespace is now `agentlens.core`.)
 
 ### Supported Benchmarks
 

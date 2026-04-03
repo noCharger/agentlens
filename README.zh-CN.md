@@ -9,46 +9,60 @@ AgentLens 是一个用于评估 AI Agent 行为的轻量平台，包含四部分
 - 评估结果：支持确定性规则检查、LLM-as-Judge 和 HTML 报告
 - 观测数据：通过 OpenTelemetry 导出 trace 和 metrics
 
-当前仓库已经切到“benchmark 原始数据动态加载”架构：
+## OSS 范围
 
-- 常规手写场景保存在 `src/agentlens/scenarios/` 下的 YAML
-- benchmark 原始文件保存在 `data/benchmarks/<slug>/` 下
-- 运行时不会再把 benchmark 批量展开并持久化成生成的 YAML
+OSS 内包含：
+
+- 本地/CI 可用的 SDK + CLI
+- 运行时 benchmark adapter 与 dataset 构建 pipeline
+- `deterministic` + `llm_judge` 评估能力与 HTML 报告
+- OpenTelemetry 埋点与本地监控基础能力
+- 本地 core 记录层（`src/agentlens/core/`）：file/sqlite 持久化、API/CLI 查询、告警规则评估
+
+OSS 外（企业/私有）：
+
+- 多租户控制面与工作空间隔离
+- 企业身份体系（SSO、SCIM、细粒度 RBAC/ABAC）
+- 合规编排（SOC2、HIPAA、GDPR、保留/法务冻结、合规报表）
+- 托管 on-prem 打包内核、数据驻留策略运维、商业 SLA/计费/支持系统
 
 ## 系统架构
 
 ```mermaid
-flowchart TD
-    A["src/agentlens/scenarios/*.yaml<br/>手写静态场景"] --> C["load_runtime_scenarios"]
-    B["data/benchmarks/<slug>/*<br/>原始 benchmark 文件"] --> D["benchmark adapters<br/>eval/importers.py"]
+flowchart LR
+    A["静态场景<br/>src/agentlens/scenarios/*.yaml"] --> C["Dataset 构建器<br/>agentlens.dataset"]
+    B["原始 benchmark<br/>data/benchmarks/<slug>/"] --> D["运行时 benchmark importer<br/>agentlens.eval.importers"]
     D --> C
-    C --> E["execute_and_eval"]
-    E --> F["L1 deterministic<br/>tool / output / trajectory"]
-    E --> G["L2 llm_judge<br/>rubric + reference"]
-    E --> H["L3 report<br/>HTML summary"]
-    E --> I["OTEL traces / metrics"]
+    C --> E["Eval 执行器<br/>agentlens.eval"]
+    E --> F["L1 deterministic 检查"]
+    E --> G["L2 llm_judge 检查"]
+    E --> H["L3 HTML 报告"]
+    E --> I["OTEL traces 与 metrics"]
+    E --> J["Core records<br/>agentlens.core"]
+    I --> J
+    J --> K["Experiment 与 monitor 视图"]
+    K --> L["Annotation 任务"]
+    K --> M["Alert 规则与事件"]
+    M --> C
 ```
 
-核心模块：
+OSS core 可靠性原则：
 
-- `src/agentlens/agents/factory.py`
-  负责创建运行时 agent 和工具预设。
-- `src/agentlens/model_selection.py`
-  解析 `provider:model` 形式的模型选择，例如 `gemini:gemini-2.5-flash` 和 `deepseek:deepseek-chat`。
-- `src/agentlens/llms.py`
-  负责构建 Gemini 和 DeepSeek 的 provider-specific chat model。
-- `src/agentlens/deepseek.py`
-  负责 DeepSeek 的预检逻辑，包括余额检查。
-- `src/agentlens/eval/scenarios.py`
-  定义 `Scenario` 模型，并把静态 YAML 场景和动态 benchmark 任务合并成运行时场景列表。
-- `src/agentlens/eval/importers.py`
-  把 parquet / jsonl / manifest / 任务目录实时映射成运行时场景。
-- `src/agentlens/eval/runner.py`
-  执行 agent、采集 spans、完成评估，并处理 retry / quota / external benchmark。
-- `src/agentlens/eval/level3_human/reporter.py`
-  生成 HTML 报告。
-- `src/agentlens/observability/`
-  负责 telemetry 初始化和指标记录。
+- API/service 尽量无状态，状态统一落到 file/sqlite 持久层
+- 快照写入支持 `idempotency_key`，便于失败重试且不重复落库
+- 列表接口统一 `limit`/`offset`，控制内存占用和背压
+- SQLite 默认走 `WAL`、`busy_timeout` 与指数退避重试，提升并发与容错
+- 审计与告警事件使用确定性 ID，避免重试导致重复事件
+
+核心包与职责：
+
+- `src/agentlens/agents/`：运行时 agent 创建与工具预设
+- `src/agentlens/model_selection.py` + `src/agentlens/llms.py`：provider/model 解析与模型客户端构建
+- `src/agentlens/eval/`：运行时场景加载、benchmark importer、eval runner、L1/L2/L3 评估输出
+- `src/agentlens/dataset/`：不可变 dataset version 构建与 dataset item 到运行时场景转换
+- `src/agentlens/core/`：本地闭环记录层、file/sqlite repository、本地 API/CLI、告警评估与事件
+- `src/agentlens/observability/`：OTEL 埋点、span 与指标
+- `src/agentlens/scenarios/`：手写静态 YAML 场景
 
 ## 目录结构
 
@@ -56,6 +70,7 @@ flowchart TD
 agentlens/
 ├── src/agentlens/
 │   ├── agents/
+│   ├── scenarios/               # 手写 YAML 场景
 │   ├── eval/
 │   │   ├── level1_deterministic/
 │   │   ├── level2_llm_judge/
@@ -64,13 +79,12 @@ agentlens/
 │   │   ├── importers.py
 │   │   ├── runner.py
 │   │   └── scenarios.py
-│   ├── observability/
-│   └── scenarios/
-│       ├── reasoning/
-│       ├── recovery/
-│       └── tool_calling/
-├── data/benchmarks/
-│   └── <slug>/
+│   ├── dataset/                 # dataset-version pipeline
+│   ├── core/                    # 本地闭环记录与 API
+│   └── observability/           # traces 与 metrics
+├── data/
+│   └── benchmarks/<slug>/       # 原始 benchmark 文件（运行时动态加载）
+├── infra/
 ├── tests/
 └── pyproject.toml
 ```
@@ -200,6 +214,9 @@ JUDGE_MODEL=gemini:gemini-2.5-flash-lite
 ```bash
 ./.venv/bin/python -m agentlens.eval --help
 ./.venv/bin/python -m agentlens.eval.importers --help
+./.venv/bin/python -m agentlens.dataset --help
+./.venv/bin/python -m agentlens.core --help
+./.venv/bin/python -m agentlens.core.api --help
 ```
 
 ## 运行内置 YAML 场景
@@ -243,6 +260,40 @@ JUDGE_MODEL=gemini:gemini-2.5-flash-lite
 - benchmark 原始文件放到 `data/benchmarks/<slug>/`
 - AgentLens 运行时动态发现并加载这些文件
 - 不再生成或依赖 `src/agentlens/scenarios/benchmarks/*.yaml`
+- eval 现在支持基于 dataset version 的可复现执行路径
+
+### 双 Pipeline 工作流
+
+先从本地场景和 benchmark 数据构建 dataset version：
+
+```bash
+./.venv/bin/python -m agentlens.dataset \
+  --benchmark gdpval-aa \
+  --name gdpval-regression \
+  --output data/datasets/gdpval-regression-v1.json
+```
+
+再基于 dataset version 文件运行 eval：
+
+```bash
+./.venv/bin/python -m agentlens.eval \
+  --dataset-version-file data/datasets/gdpval-regression-v1.json \
+  --level2 \
+  --output gdpval.html
+```
+
+也可以基于已持久化的 dataset version id 运行：
+
+```bash
+./.venv/bin/python -m agentlens.eval \
+  --dataset-version-id <dataset_version_id> \
+  --platform-store .agentlens-platform \
+  --platform-project-slug qa-project
+```
+
+兼容模式仍然可用：`agentlens.eval --benchmark ...` 会继续工作，runner 内部会先构建一个内存中的 dataset version 再执行。
+当同时传入 `--platform-store` 或 `--platform-sqlite` 时，这条兼容路径会使用确定性的 dataset fingerprint，复用同一个 dataset version id，避免重复生成。
+（`--platform-*` 参数目前保留为向后兼容命名；OSS 模块命名已经切换到 `agentlens.core`。）
 
 ### 支持的 benchmark
 
