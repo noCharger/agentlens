@@ -521,26 +521,68 @@ class GDPValAAImporter(RecordBenchmarkImporter):
                 return [matches[0]]
         return []
 
+    @staticmethod
+    def _infer_dataset_root(input_path: Path) -> Path:
+        if input_path.parent.name == "data":
+            return input_path.parent.parent
+        return input_path.parent
+
+    @staticmethod
+    def _resolve_dataset_relative_paths(root: Path, paths: list[str]) -> list[str]:
+        resolved: list[str] = []
+        for value in paths:
+            p = (root / value).resolve()
+            resolved.append(str(p))
+        return resolved
+
     def make_scenario(self, item: dict[str, Any], index: int, input_path: Path) -> Scenario:
         source_id = str(_first_nonempty(item, "task_id", "id") or f"item-{index:04d}")
         prompt = str(_first_nonempty(item, "prompt", "query", "task") or "").strip()
         if not prompt:
             raise ValueError(f"GDPval record {source_id} is missing prompt.")
 
+        dataset_root = self._infer_dataset_root(input_path)
         reference_files = [str(value) for value in _ensure_list(item.get("reference_files"))]
         deliverable_files = [str(value) for value in _ensure_list(item.get("deliverable_files"))]
+        reference_file_urls = [str(value) for value in _ensure_list(item.get("reference_file_urls"))]
+        reference_file_hf_uris = [str(value) for value in _ensure_list(item.get("reference_file_hf_uris"))]
+        resolved_reference_files = self._resolve_dataset_relative_paths(dataset_root, reference_files)
+        resolved_deliverable_files = self._resolve_dataset_relative_paths(dataset_root, deliverable_files)
         rubric_text = _format_rubric_text(
             _first_nonempty(item, "rubric_pretty", "rubric", "rubric_json")
         )
-        if reference_files:
+        if resolved_reference_files:
+            reference_lines: list[str] = []
+            for idx, local_path in enumerate(resolved_reference_files):
+                reference_lines.append(f"- {local_path}")
+                local_exists = Path(local_path).exists()
+                source_url = reference_file_urls[idx] if idx < len(reference_file_urls) else ""
+                source_hf_uri = (
+                    reference_file_hf_uris[idx] if idx < len(reference_file_hf_uris) else ""
+                )
+                if not local_exists and (source_url or source_hf_uri):
+                    source = source_url or source_hf_uri
+                    reference_lines.append(f"  (missing locally; source: {source})")
             prompt = (
                 f"{prompt}\n\nReference files available to the agent:\n"
-                + "\n".join(f"- {path}" for path in reference_files)
+                + "\n".join(reference_lines)
             )
-        if deliverable_files:
+        if resolved_deliverable_files:
             prompt = (
                 f"{prompt}\n\nExpected deliverable files:\n"
-                + "\n".join(f"- {path}" for path in deliverable_files)
+                + "\n".join(f"- {path}" for path in resolved_deliverable_files)
+            )
+        has_spreadsheet_task = any(
+            path.lower().endswith(".xlsx")
+            for path in resolved_reference_files + resolved_deliverable_files
+        )
+        if has_spreadsheet_task:
+            prompt = (
+                f"{prompt}\n\nSpreadsheet execution guidance:\n"
+                "- Use Python via the shell tool with openpyxl to read/write .xlsx files.\n"
+                "- Do not use `cat` or GUI `open` on .xlsx files; they are binary formats.\n"
+                "- Create the output workbook exactly at the deliverable file path(s).\n"
+                "- Verify the output file exists before finishing."
             )
 
         metadata = {
@@ -549,9 +591,11 @@ class GDPValAAImporter(RecordBenchmarkImporter):
             "sector": item.get("sector"),
             "occupation": item.get("occupation"),
             "reference_files": reference_files,
-            "reference_file_urls": item.get("reference_file_urls"),
-            "reference_file_hf_uris": item.get("reference_file_hf_uris"),
+            "resolved_reference_files": resolved_reference_files,
+            "reference_file_urls": reference_file_urls,
+            "reference_file_hf_uris": reference_file_hf_uris,
             "deliverable_files": deliverable_files,
+            "resolved_deliverable_files": resolved_deliverable_files,
             "deliverable_text": item.get("deliverable_text"),
         }
 

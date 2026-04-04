@@ -1,8 +1,10 @@
 import pytest
+from types import SimpleNamespace
 
 from agentlens.agents.factory import (
     TOOL_PRESETS,
     _build_tools,
+    create_agent,
     get_tool_names_for_preset,
 )
 
@@ -51,3 +53,29 @@ def test_build_tools_unknown_tool():
 def test_build_tools_empty_list():
     tools = _build_tools([])
     assert tools == []
+
+
+def test_create_agent_passes_agent_max_tokens(monkeypatch):
+    captured = {}
+
+    def fake_create_chat_llm(settings, model, **kwargs):
+        captured["model"] = model
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("agentlens.agents.factory.create_chat_llm", fake_create_chat_llm)
+    monkeypatch.setattr(
+        "agentlens.agents.factory._build_tools",
+        lambda _, **kwargs: [],
+    )
+    monkeypatch.setattr("agentlens.agents.factory.create_react_agent", lambda llm, tools: llm)
+
+    settings = SimpleNamespace(
+        agent_model="openrouter:openai/gpt-4.1",
+        agent_max_tokens=321,
+    )
+
+    _ = create_agent(settings, preset="full")
+
+    assert captured["model"] == "openrouter:openai/gpt-4.1"
+    assert captured["max_tokens"] == 321

@@ -10,6 +10,8 @@ from agentlens.eval.scenarios import ExpectedResult, Scenario
 from agentlens.eval.runner import (
     EvalResult,
     Level1Result,
+    _has_level2_rubric,
+    _run_level2,
     evaluate_scenario,
     execute_and_eval,
     run_level1_eval,
@@ -160,3 +162,47 @@ def test_execute_and_eval_llm_judge_requires_level2():
     result = execute_and_eval(scenario, settings=SimpleNamespace(), with_level2=False)
     assert result.passed is False
     assert "requires LLM-as-Judge" in (result.error or "")
+
+
+def test_has_level2_rubric_with_judge_rubric_text_only():
+    scenario = _make_scenario(
+        evaluation_mode="llm_judge",
+        judge_rubric="",
+        judge_rubric_text="Score quality from 1-5.",
+        expected=ExpectedResult(tools_called=[], max_steps=5, output_contains=[]),
+    )
+    assert _has_level2_rubric(scenario) is True
+
+
+def test_run_level2_sets_error_when_judge_returns_no_scores(monkeypatch):
+    scenario = _make_scenario(
+        evaluation_mode="llm_judge",
+        expected=ExpectedResult(tools_called=[], max_steps=5, output_contains=[]),
+        judge_rubric_text="Score quality from 1-5.",
+    )
+    eval_result = EvalResult(
+        scenario=scenario,
+        level1=Level1Result(
+            tool_usage=ToolUsageResult(True, [], [], [], []),
+            output_format=OutputFormatResult(True, "ok", [], []),
+            trajectory=TrajectoryResult(True, 1, 5, False, 0, 0, None, []),
+        ),
+    )
+
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.judge.create_judge_llm",
+        lambda settings: object(),
+    )
+
+    class DummyJudgeResult:
+        scores = []
+
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.judge.judge_scenario",
+        lambda **kwargs: DummyJudgeResult(),
+    )
+
+    _run_level2(eval_result, spans=[], scenario=scenario, settings=SimpleNamespace())
+
+    assert eval_result.level2_scores == {"error": -1}
+    assert "returned no scores" in (eval_result.error or "")

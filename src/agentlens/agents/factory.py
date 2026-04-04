@@ -2,6 +2,7 @@ from langgraph.prebuilt import create_react_agent
 
 from agentlens.config import AgentLensSettings
 from agentlens.llms import create_chat_llm
+from agentlens.sandbox import GuardedShellTool, ShellSandboxPolicy, build_shell_sandbox_policy
 
 
 TOOL_PRESETS: dict[str, list[str]] = {
@@ -13,8 +14,13 @@ TOOL_PRESETS: dict[str, list[str]] = {
 }
 
 
-def _build_tools(tool_names: list[str]):
+def _build_tools(
+    tool_names: list[str],
+    *,
+    shell_policy: ShellSandboxPolicy | None = None,
+):
     tools = []
+    policy = shell_policy or ShellSandboxPolicy.disabled()
     for name in tool_names:
         if name == "read_file":
             from langchain_community.tools import ReadFileTool
@@ -25,9 +31,7 @@ def _build_tools(tool_names: list[str]):
 
             tools.append(WriteFileTool())
         elif name == "shell":
-            from langchain_community.tools import ShellTool
-
-            tools.append(ShellTool())
+            tools.append(GuardedShellTool(shell_policy=policy))
         elif name == "duckduckgo_search":
             from langchain_community.tools import DuckDuckGoSearchRun
 
@@ -37,13 +41,23 @@ def _build_tools(tool_names: list[str]):
     return tools
 
 
-def create_agent(settings: AgentLensSettings, preset: str = "full"):
+def create_agent(
+    settings: AgentLensSettings,
+    preset: str = "full",
+    *,
+    scenario=None,
+):
     tool_names = TOOL_PRESETS.get(preset)
     if tool_names is None:
         raise ValueError(f"Unknown preset: {preset}. Available: {list(TOOL_PRESETS.keys())}")
 
-    llm = create_chat_llm(settings, settings.agent_model)
-    tools = _build_tools(tool_names)
+    llm = create_chat_llm(
+        settings,
+        settings.agent_model,
+        max_tokens=settings.agent_max_tokens,
+    )
+    shell_policy = build_shell_sandbox_policy(scenario) if scenario is not None else None
+    tools = _build_tools(tool_names, shell_policy=shell_policy)
     return create_react_agent(llm, tools)
 
 

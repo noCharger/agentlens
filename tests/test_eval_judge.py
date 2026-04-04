@@ -16,6 +16,7 @@ from agentlens.eval.level2_llm_judge.judge import (
     _format_trajectory,
     _extract_final_answer,
     _parse_judge_response,
+    create_judge_llm,
     judge_scenario,
 )
 
@@ -131,6 +132,24 @@ def test_parse_judge_response_markdown_json():
     assert result.score == 3
 
 
+def test_parse_judge_response_with_wrapped_text():
+    text = (
+        "Here is the evaluation result:\n"
+        '{"dimension":"accuracy","score":4,"explanation":"mostly correct"}\n'
+        "done."
+    )
+    result = _parse_judge_response(text, "accuracy")
+    assert result.score == 4
+
+
+def test_parse_judge_response_list_content_blocks():
+    content = [
+        {"type": "text", "text": '{"dimension":"accuracy","score":5,"explanation":"great"}'},
+    ]
+    result = _parse_judge_response(content, "accuracy")
+    assert result.score == 5
+
+
 # --- Judge Scenario (mocked LLM) ---
 
 
@@ -191,3 +210,27 @@ def test_judge_scenario_with_custom_rubric_text():
     assert result.scores[0].score == 4
     assert result.scores[0].dimension == "custom"
     mock_llm.invoke.assert_called_once()
+
+
+def test_create_judge_llm_uses_configured_max_tokens(monkeypatch):
+    captured = {}
+
+    def fake_create_chat_llm(settings, model, **kwargs):
+        captured["model"] = model
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.judge.create_chat_llm",
+        fake_create_chat_llm,
+    )
+
+    settings = MagicMock()
+    settings.judge_model = "openrouter:openai/gpt-4.1"
+    settings.judge_max_tokens = 333
+
+    _ = create_judge_llm(settings)
+
+    assert captured["model"] == "openrouter:openai/gpt-4.1"
+    assert captured["temperature"] == 0.0
+    assert captured["max_tokens"] == 333

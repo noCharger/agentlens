@@ -46,32 +46,41 @@ def test_swe_bench_importer_maps_issue_records():
 
 def test_gdpval_importer_builds_llm_judge_scenarios():
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "gdpval.json"
+        root = Path(tmpdir) / "gdpval-aa"
+        root.mkdir()
+        (root / "reference_files").mkdir()
+        (root / "deliverable_files").mkdir()
+        (root / "reference_files" / "brief.xlsx").write_text("placeholder")
+        path = root / "gdpval.json"
         path.write_text(
             json.dumps(
                 [
                     {
                         "task_id": "task-001",
                         "prompt": "Analyze the market and provide a written memo.",
-                        "rubric_pretty": [
-                            {"score": 5, "criterion": "Insightful and complete"},
-                            {"score": 3, "criterion": "Adequate but shallow"},
-                        ],
-                        "reference_files": ["brief.md"],
-                        "deliverable_files": ["memo.md"],
-                        "deliverable_text": "A strong memo.",
-                    }
-                ]
+                            "rubric_pretty": [
+                                {"score": 5, "criterion": "Insightful and complete"},
+                                {"score": 3, "criterion": "Adequate but shallow"},
+                            ],
+                            "reference_files": ["reference_files/brief.xlsx"],
+                            "deliverable_files": ["deliverable_files/memo.xlsx"],
+                            "deliverable_text": "A strong memo.",
+                        }
+                    ]
+                )
             )
-        )
 
         result = load_benchmark_dataset("gdpval-aa", path)
 
     scenario = result.scenarios[0]
     assert scenario.evaluation_mode == "llm_judge"
-    assert "brief.md" in scenario.input_query
+    assert "brief.xlsx" in scenario.input_query
+    assert str((root / "reference_files" / "brief.xlsx").resolve()) in scenario.input_query
     assert "Insightful and complete" in scenario.judge_rubric_text
     assert scenario.reference_answer == "A strong memo."
+    assert str((root / "deliverable_files" / "memo.xlsx").resolve()) in scenario.input_query
+    assert "openpyxl" in scenario.input_query
+    assert "Do not use `cat` or GUI `open` on .xlsx files" in scenario.input_query
 
 
 def test_toolathlon_importer_reads_task_directories():

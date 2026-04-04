@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from opentelemetry.sdk.trace import ReadableSpan
@@ -45,16 +46,24 @@ def _extract_final_answer(spans: list[ReadableSpan]) -> str:
 
 
 def _parse_judge_response(text: str, dimension: str) -> JudgeScore:
-    """Parse JSON response from judge LLM."""
-    # Try to extract JSON from the response
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
+    """Parse JSON response from judge LLM.
 
-    data = json.loads(text)
+    Handles common provider variations:
+    - markdown fenced JSON
+    - explanatory text surrounding a JSON object
+    - list-structured content blocks (OpenAI-compatible responses)
+    """
+    normalized = _normalize_judge_response_text(text).strip()
+
+    data = _try_load_json(normalized)
+    if data is None:
+        # Fallback: find first JSON object embedded in free-form text.
+        match = re.search(r"\{[\s\S]*\}", normalized)
+        if match:
+            data = _try_load_json(match.group(0))
+    if data is None:
+        raise ValueError(f"Judge response is not valid JSON: {normalized[:240]}")
+
     return JudgeScore(
         dimension=data.get("dimension", dimension),
         score=int(data["score"]),
@@ -62,8 +71,51 @@ def _parse_judge_response(text: str, dimension: str) -> JudgeScore:
     )
 
 
+def _normalize_judge_response_text(raw: object) -> str:
+    if isinstance(raw, str):
+        text = raw
+    elif isinstance(raw, list):
+        parts: list[str] = []
+        for item in raw:
+            if isinstance(item, dict):
+                if "text" in item:
+                    parts.append(str(item["text"]))
+                else:
+                    parts.append(str(item))
+            else:
+                parts.append(str(item))
+        text = "\n".join(parts)
+    else:
+        text = str(raw)
+
+    text = text.strip()
+    if text.startswith("```"):
+        chunks = text.split("```")
+        if len(chunks) >= 2:
+            text = chunks[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+    return text
+
+
+def _try_load_json(text: str) -> dict | None:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
 def create_judge_llm(settings: AgentLensSettings):
-    return create_chat_llm(settings, settings.judge_model, temperature=0.0)
+    return create_chat_llm(
+        settings,
+        settings.judge_model,
+        temperature=0.0,
+        max_tokens=settings.judge_max_tokens,
+    )
 
 
 def judge_scenario(

@@ -80,11 +80,16 @@ def fetch_deepseek_balance(
     timeout_s: float = 10.0,
 ) -> DeepSeekBalanceSummary:
     endpoint = f"{_normalize_deepseek_api_base(base_url)}/user/balance"
-    response = httpx.get(
-        endpoint,
-        headers={"Authorization": f"Bearer {api_key}"},
-        timeout=timeout_s,
-    )
+    try:
+        response = httpx.get(
+            endpoint,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=timeout_s,
+        )
+    except httpx.HTTPError as exc:
+        raise DeepSeekPreflightError(
+            f"DeepSeek balance check failed due to network error: {exc}"
+        ) from exc
 
     if response.status_code == 401:
         raise DeepSeekPreflightError(

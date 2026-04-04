@@ -25,6 +25,7 @@ from agentlens.dataset.builder import (
     make_deterministic_id_factory,
 )
 from agentlens.deepseek import DeepSeekPreflightError, validate_deepseek_preflight
+from agentlens.openrouter import OpenRouterPreflightError, validate_openrouter_preflight
 from agentlens.eval.benchmarks import (
     UNASSIGNED_BENCHMARK,
     collect_benchmark_inventory,
@@ -367,12 +368,18 @@ def main():
     parser.add_argument(
         "--agent-model",
         type=str,
-        help="Override agent model, for example gemini:gemini-2.5-flash or deepseek:deepseek-chat",
+        help=(
+            "Override agent model, for example gemini:gemini-2.5-flash, "
+            "deepseek:deepseek-chat, or openrouter:openai/gpt-4o-mini"
+        ),
     )
     parser.add_argument(
         "--judge-model",
         type=str,
-        help="Override judge model, for example gemini:gemini-2.5-flash-lite or deepseek:deepseek-chat",
+        help=(
+            "Override judge model, for example gemini:gemini-2.5-flash-lite, "
+            "deepseek:deepseek-chat, or openrouter:openai/gpt-4o-mini"
+        ),
     )
     parser.add_argument(
         "--benchmark",
@@ -477,7 +484,10 @@ def main():
         settings = get_settings(**settings_overrides)
     except Exception as e:
         console.print(f"[red]Failed to load settings: {e}[/red]")
-        console.print("[yellow]Set GOOGLE_API_KEY and/or DEEPSEEK_API_KEY in .env or environment[/yellow]")
+        console.print(
+            "[yellow]Set GOOGLE_API_KEY and/or DEEPSEEK_API_KEY and/or OPENROUTER_API_KEY "
+            "in .env or environment[/yellow]"
+        )
         sys.exit(1)
 
     meter_provider = _init_metrics(settings)
@@ -494,6 +504,20 @@ def main():
     if deepseek_balance is not None:
         console.print(
             f"[dim]DeepSeek balance check passed ({deepseek_balance.formatted_totals})[/dim]"
+        )
+
+    try:
+        openrouter_summary = validate_openrouter_preflight(
+            settings,
+            require_judge=args.level2,
+        )
+    except OpenRouterPreflightError as e:
+        console.print(f"[red]OpenRouter preflight failed:[/red] {e}")
+        sys.exit(1)
+
+    if openrouter_summary is not None:
+        console.print(
+            f"[dim]OpenRouter key check passed ({openrouter_summary.formatted_status})[/dim]"
         )
 
     console.print(f"\nRunning [bold]{len(scenarios)}[/bold] scenarios with [cyan]{settings.agent_model}[/cyan]")
@@ -524,6 +548,17 @@ def main():
             console.print("[red]FAIL[/red]")
             if result.error:
                 console.print(f"  [dim]{result.error}[/dim]")
+            elif args.level2 and result.level2_scores and result.scenario.evaluation_mode == "llm_judge":
+                scored = {k: v for k, v in result.level2_scores.items() if v >= 0}
+                if scored:
+                    details = ", ".join(f"{dim}={score:.1f}" for dim, score in scored.items())
+                    overall = result.judge_overall_score
+                    overall_text = f"{overall:.1f}" if overall is not None else "n/a"
+                    console.print(
+                        "  [dim]L2 below threshold: "
+                        f"overall={overall_text}, threshold={result.scenario.judge_threshold:.1f}, "
+                        f"details=({details})[/dim]"
+                    )
 
     console.print()
     _print_results(results)

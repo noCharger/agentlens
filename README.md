@@ -131,6 +131,8 @@ If you want parquet support or benchmark downloads:
 pip install -e ".[dev,benchmarks]"
 ```
 
+`.[benchmarks]` also includes `openpyxl`, `pandas`, and `numpy`, which GDPval spreadsheet tasks rely on.
+
 ## Configuration
 
 Settings are loaded via `pydantic-settings` from `.env`.
@@ -139,9 +141,15 @@ A minimal example:
 ```bash
 GOOGLE_API_KEY=your_google_ai_studio_key
 DEEPSEEK_API_KEY=your_deepseek_api_key
+OPENROUTER_API_KEY=your_openrouter_api_key
 DEEPSEEK_API_BASE=https://api.deepseek.com
+OPENROUTER_API_BASE=https://openrouter.ai/api/v1
+OPENROUTER_HTTP_REFERER=https://your-app.example
+OPENROUTER_X_TITLE=AgentLens
 AGENT_MODEL=gemini:gemini-2.5-flash
 JUDGE_MODEL=gemini:gemini-2.5-flash-lite
+AGENT_MAX_TOKENS=2048
+JUDGE_MAX_TOKENS=512
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 OTEL_SERVICE_NAME=agentlens
 AGENT_MAX_STEPS=10
@@ -151,7 +159,11 @@ Notes:
 
 - `GOOGLE_API_KEY` is only required when you select a Gemini model.
 - `DEEPSEEK_API_KEY` is only required when you select a DeepSeek model.
+- `OPENROUTER_API_KEY` is only required when you select an OpenRouter model.
 - `JUDGE_MODEL` is only used when `--level2` is enabled.
+- `AGENT_MAX_TOKENS` limits agent output tokens (important for low-credit OpenRouter keys).
+- `JUDGE_MAX_TOKENS` limits L2 judge output tokens (useful for low-credit OpenRouter keys).
+- `OPENROUTER_HTTP_REFERER` and `OPENROUTER_X_TITLE` are optional, but recommended for OpenRouter requests.
 - OTEL is optional. If no collector is available, the runner will degrade as gracefully as possible.
 
 ## Model Selection
@@ -160,6 +172,7 @@ Notes:
 
 - Explicit provider syntax: `gemini:gemini-2.5-flash`
 - Bare model names: `deepseek-chat`
+- Namespaced model names (for example `openai/gpt-4o-mini`) are inferred as OpenRouter
 
 Explicit provider syntax is recommended because it is clearer and avoids ambiguity.
 
@@ -175,27 +188,33 @@ AGENT_MODEL=deepseek:deepseek-chat
 JUDGE_MODEL=deepseek:deepseek-chat
 ```
 
+```bash
+AGENT_MODEL=openrouter:openai/gpt-4o-mini
+JUDGE_MODEL=openrouter:openai/gpt-4o-mini
+```
+
 Mixed setup:
 
 ```bash
 AGENT_MODEL=deepseek:deepseek-chat
-JUDGE_MODEL=gemini:gemini-2.5-flash-lite
+JUDGE_MODEL=openrouter:openai/gpt-4o-mini
 ```
 
 Temporary CLI override:
 
 ```bash
 ./.venv/bin/python -m agentlens.eval \
-  --agent-model deepseek:deepseek-chat \
-  --judge-model deepseek:deepseek-chat \
+  --agent-model openrouter:openai/gpt-4o-mini \
+  --judge-model openrouter:openai/gpt-4o-mini \
   --scenario-id tc-001
 ```
 
 Notes:
 
 - `deepseek:deepseek-chat` is a good default for general tool-using agent runs.
-- The judge can use either Gemini or DeepSeek.
+- The judge can use Gemini, DeepSeek, or OpenRouter.
 - When a DeepSeek model is selected, AgentLens performs a balance preflight check before running scenarios. If the account has insufficient balance, the command fails early with a clear error.
+- When an OpenRouter model is selected, AgentLens performs a key preflight check before running scenarios and fails early on auth/credit issues.
 
 ## Local Development Commands
 
@@ -318,6 +337,30 @@ Evaluation mode summary:
   Requires `--level2` and uses a rubric plus a reference answer.
 - `external`
   AgentLens can load, filter, inventory, and report these tasks, but does not score them as passing with the built-in runner.
+
+### Benchmark Sandbox (Default)
+
+Benchmark scenarios run inside a default sandbox policy (first-class, not opt-in):
+
+- `prepare` phase (harness-controlled): validates required Python modules and benchmark reference files.
+- `run` phase (agent-controlled): shell commands are checked against benchmark capability profiles.
+
+During agent execution, non-task commands such as `pip`, `curl`, and GUI `open` are blocked unless a benchmark profile explicitly allows them.
+
+You can override capabilities per benchmark with:
+
+`data/benchmarks/<benchmark-slug>/sandbox_profile.json`
+
+Example:
+
+```json
+{
+  "allowed_commands": ["python", "python3", "pip", "ls", "cp", "mv"],
+  "blocked_commands": ["curl", "wget", "open"],
+  "required_python_modules": ["openpyxl", "pandas"],
+  "extra_allowed_roots": ["workdir"]
+}
+```
 
 ### Benchmark Data Layout
 

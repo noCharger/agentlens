@@ -23,6 +23,7 @@ from agentlens.eval.level1_deterministic.output_format import (
     evaluate_output_format,
 )
 from agentlens.eval.level1_deterministic.trajectory import TrajectoryResult, evaluate_trajectory
+from agentlens.sandbox import prepare_benchmark_environment
 
 log = logging.getLogger("agentlens.eval")
 
@@ -207,6 +208,13 @@ def _resolve_preset(preset: str, scenario_tools: set[str]) -> str:
     return _PRESET_MAP.get(frozenset(scenario_tools), preset)
 
 
+def _has_level2_rubric(scenario: Scenario) -> bool:
+    return bool(
+        (scenario.judge_rubric or "").strip()
+        or (scenario.judge_rubric_text or "").strip()
+    )
+
+
 def _normalize_content(raw: object) -> str:
     """Normalize Gemini response content to a plain string.
 
@@ -275,6 +283,10 @@ def execute_and_eval(
         except subprocess.CalledProcessError as e:
             return _error_result(scenario, f"Setup failed: {e}")
 
+    prepare_error = prepare_benchmark_environment(scenario)
+    if prepare_error:
+        return _error_result(scenario, prepare_error)
+
     provider, mem_exporter = _create_provider(settings.otel_exporter_otlp_endpoint)
     actual_preset = _resolve_preset(preset, set(scenario.expected.tools_called))
     instrumentor = instrument_langchain(provider)
@@ -310,7 +322,7 @@ def execute_and_eval(
 
     _record_metrics_best_effort(spans, scenario, eval_result)
 
-    if with_level2 and scenario.judge_rubric:
+    if with_level2 and _has_level2_rubric(scenario):
         _run_level2(eval_result, spans, scenario, settings)
         time.sleep(rate_limit_delay)
 
@@ -325,7 +337,7 @@ def _invoke_agent_with_retries(settings, preset, scenario, provider, instrumento
         try:
             from agentlens.agents.factory import create_agent
 
-            agent = create_agent(settings, preset=preset)
+            agent = create_agent(settings, preset=preset, scenario=scenario)
             return agent.invoke(
                 {"messages": [("user", scenario.input_query)]},
                 config={"recursion_limit": scenario.expected.max_steps * 2},
@@ -370,8 +382,14 @@ def _run_level2(eval_result: EvalResult, spans, scenario, settings) -> None:
             rubric_text=scenario.judge_rubric_text,
         )
         eval_result.level2_scores = {s.dimension: s.score for s in judge_result.scores}
-    except Exception:
+        if not eval_result.level2_scores:
+            eval_result.level2_scores = {"error": -1}
+            eval_result.error = (
+                "L2 judge returned no scores. Check rubric data and judge model response format."
+            )
+    except Exception as exc:
         eval_result.level2_scores = {"error": -1}
+        eval_result.error = f"L2 judge failed: {exc}"
 
 
 def _record_metrics_best_effort(

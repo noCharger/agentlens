@@ -130,6 +130,8 @@ pip install -e ".[dev]"
 pip install -e ".[dev,benchmarks]"
 ```
 
+`.[benchmarks]` 也会安装 `openpyxl`、`pandas`、`numpy`，GDPval 这类电子表格任务会用到它们。
+
 ## 环境变量
 
 项目通过 `pydantic-settings` 从 `.env` 读取配置。最小示例：
@@ -137,9 +139,15 @@ pip install -e ".[dev,benchmarks]"
 ```bash
 GOOGLE_API_KEY=your_google_ai_studio_key
 DEEPSEEK_API_KEY=your_deepseek_api_key
+OPENROUTER_API_KEY=your_openrouter_api_key
 DEEPSEEK_API_BASE=https://api.deepseek.com
+OPENROUTER_API_BASE=https://openrouter.ai/api/v1
+OPENROUTER_HTTP_REFERER=https://your-app.example
+OPENROUTER_X_TITLE=AgentLens
 AGENT_MODEL=gemini:gemini-2.5-flash
 JUDGE_MODEL=gemini:gemini-2.5-flash-lite
+AGENT_MAX_TOKENS=2048
+JUDGE_MAX_TOKENS=512
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 OTEL_SERVICE_NAME=agentlens
 AGENT_MAX_STEPS=10
@@ -149,7 +157,11 @@ AGENT_MAX_STEPS=10
 
 - `GOOGLE_API_KEY` 只在选择 Gemini 模型时需要
 - `DEEPSEEK_API_KEY` 只在选择 DeepSeek 模型时需要
+- `OPENROUTER_API_KEY` 只在选择 OpenRouter 模型时需要
 - `JUDGE_MODEL` 只在 `--level2` 时使用
+- `AGENT_MAX_TOKENS` 用于限制 Agent 输出 token（OpenRouter 低额度 key 很关键）
+- `JUDGE_MAX_TOKENS` 用于限制 L2 judge 输出 token（OpenRouter 低额度 key 特别有用）
+- `OPENROUTER_HTTP_REFERER` 和 `OPENROUTER_X_TITLE` 可选，但建议在 OpenRouter 请求里配置
 - 没有 OTEL collector 也可以运行；系统会尽量优雅降级
 
 ## Model Select
@@ -158,6 +170,7 @@ AGENT_MAX_STEPS=10
 
 - 显式 provider：`gemini:gemini-2.5-flash`
 - 直接写模型名：`deepseek-chat`
+- 带命名空间的模型名（例如 `openai/gpt-4o-mini`）会自动推断为 OpenRouter
 
 推荐始终显式写 provider，这样更清楚，也更方便在多 provider 间切换。
 
@@ -173,27 +186,33 @@ AGENT_MODEL=deepseek:deepseek-chat
 JUDGE_MODEL=deepseek:deepseek-chat
 ```
 
+```bash
+AGENT_MODEL=openrouter:openai/gpt-4o-mini
+JUDGE_MODEL=openrouter:openai/gpt-4o-mini
+```
+
 也可以混搭：
 
 ```bash
 AGENT_MODEL=deepseek:deepseek-chat
-JUDGE_MODEL=gemini:gemini-2.5-flash-lite
+JUDGE_MODEL=openrouter:openai/gpt-4o-mini
 ```
 
 如果只是临时切换，不改 `.env`，也可以直接走 CLI override：
 
 ```bash
 ./.venv/bin/python -m agentlens.eval \
-  --agent-model deepseek:deepseek-chat \
-  --judge-model deepseek:deepseek-chat \
+  --agent-model openrouter:openai/gpt-4o-mini \
+  --judge-model openrouter:openai/gpt-4o-mini \
   --scenario-id tc-001
 ```
 
 说明：
 
 - `deepseek:deepseek-chat` 适合作为通用工具调用 agent 的默认选择
-- judge 侧可以继续用 Gemini，也可以切到 DeepSeek
+- judge 侧可以用 Gemini、DeepSeek 或 OpenRouter
 - 如果选中了 DeepSeek，AgentLens 会在真正开跑前先做一次余额预检；余额不足时会直接提前报错
+- 如果选中了 OpenRouter，AgentLens 会在开跑前做一次 key 预检；鉴权或额度异常会提前报错
 
 ## 本地开发命令
 
@@ -316,6 +335,30 @@ JUDGE_MODEL=gemini:gemini-2.5-flash-lite
   需要 `--level2`，使用 rubric 和参考答案做评分。
 - `external`
   AgentLens 可以加载、筛选、列出和出报告，但不会把它误判成 PASS；真正评分要接外部 benchmark harness。
+
+### Benchmark 沙箱（默认启用）
+
+Benchmark 场景现在默认走沙箱策略（不是可选项）：
+
+- `prepare` 阶段（harness 控制）：检查必需 Python 依赖和 benchmark 参考文件是否就绪。
+- `run` 阶段（agent 控制）：按 benchmark 能力配置校验 shell 命令。
+
+在 agent 运行期间，`pip`、`curl`、GUI `open` 等非任务命令会被拦截，除非该 benchmark 配置显式放行。
+
+你也可以按 benchmark 覆盖能力配置：
+
+`data/benchmarks/<benchmark-slug>/sandbox_profile.json`
+
+示例：
+
+```json
+{
+  "allowed_commands": ["python", "python3", "pip", "ls", "cp", "mv"],
+  "blocked_commands": ["curl", "wget", "open"],
+  "required_python_modules": ["openpyxl", "pandas"],
+  "extra_allowed_roots": ["workdir"]
+}
+```
 
 ### Benchmark 数据放置约定
 

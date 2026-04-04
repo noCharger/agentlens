@@ -2,7 +2,7 @@ id: tc-003
 name: "Shell + File Write Chain"
 category: tool_calling
 input:
-  query: "List all .py files in /tmp/agentlens_test and save the output to /tmp/agentlens_test/listing.txt"
+  query: "List all .py files in /tmp/agentlens_test, save the output to /tmp/agentlens_test/listing.txt, then tell me exactly which files were listed."
   setup:
     - "mkdir -p /tmp/agentlens_test && touch /tmp/agentlens_test/a.py /tmp/agentlens_test/b.py"
 expected:
@@ -10,4 +10,4 @@ expected:
   max_steps: 5
   output_contains: ["a.py", "b.py"]
 judge_rubric: "tool_appropriateness"
-reference_answer: "Listed a.py and b.py, saved to listing.txt"
+reference_answer: "Saved the listing to /tmp/agentlens_test/listing.txt and reported that the files are a.py and b.py."
