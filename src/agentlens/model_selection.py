@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SUPPORTED_MODEL_PROVIDERS = ("gemini", "deepseek", "openrouter")
+SUPPORTED_MODEL_PROVIDERS = ("gemini", "deepseek", "openrouter", "zhipu")
 DEFAULT_AGENT_MODEL = "gemini:gemini-2.5-flash"
 DEFAULT_JUDGE_MODEL = "gemini:gemini-2.5-flash-lite"
 
@@ -24,6 +24,8 @@ def _infer_provider(model_name: str, default_provider: str = "gemini") -> str:
         return "gemini"
     if lowered.startswith("deepseek"):
         return "deepseek"
+    if lowered.startswith(("glm", "zhipu")):
+        return "zhipu"
     if "/" in lowered and not lowered.startswith(("http://", "https://")):
         # OpenRouter model identifiers are typically provider-prefixed
         # names like "openai/gpt-4o-mini".
@@ -64,4 +66,6 @@ def required_api_key_env(provider: str) -> str:
         return "DEEPSEEK_API_KEY"
     if provider == "openrouter":
         return "OPENROUTER_API_KEY"
+    if provider == "zhipu":
+        return "ZHIPU_API_KEY"
     raise ValueError(f"Unsupported model provider '{provider}'")

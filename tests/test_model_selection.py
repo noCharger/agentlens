@@ -22,10 +22,23 @@ def test_resolve_model_selection_prefixed_openrouter_provider():
     assert selection.label == "openrouter:openai/gpt-4o-mini"
 
 
+def test_resolve_model_selection_prefixed_zhipu_provider():
+    selection = resolve_model_selection("zhipu:glm-4-plus")
+    assert selection.provider == "zhipu"
+    assert selection.model_name == "glm-4-plus"
+    assert selection.label == "zhipu:glm-4-plus"
+
+
 def test_resolve_model_selection_infers_provider_from_bare_name():
     selection = resolve_model_selection("deepseek-chat")
     assert selection.provider == "deepseek"
     assert selection.model_name == "deepseek-chat"
+
+
+def test_resolve_model_selection_infers_zhipu_from_glm_model_name():
+    selection = resolve_model_selection("glm-4-plus")
+    assert selection.provider == "zhipu"
+    assert selection.model_name == "glm-4-plus"
 
 
 def test_resolve_model_selection_infers_openrouter_for_namespace_model():
@@ -89,6 +102,17 @@ def test_create_chat_llm_requires_openrouter_key():
         create_chat_llm(settings, settings.agent_model)
 
 
+def test_create_chat_llm_requires_zhipu_key():
+    settings = AgentLensSettings(
+        _env_file=None,
+        agent_model="zhipu:glm-4-plus",
+        judge_model="gemini:gemini-2.5-flash-lite",
+    )
+
+    with pytest.raises(ValueError, match="ZHIPU_API_KEY"):
+        create_chat_llm(settings, settings.agent_model)
+
+
 def test_create_chat_llm_uses_openrouter_sdk(monkeypatch):
     captured = {}
     fake_module = ModuleType("langchain_openai")
@@ -122,3 +146,32 @@ def test_create_chat_llm_uses_openrouter_sdk(monkeypatch):
         "HTTP-Referer": "https://agentlens.example",
         "X-Title": "AgentLens Test",
     }
+
+
+def test_create_chat_llm_uses_zhipu_via_openai_compatible_sdk(monkeypatch):
+    captured = {}
+    fake_module = ModuleType("langchain_openai")
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    fake_module.ChatOpenAI = FakeChatOpenAI
+    monkeypatch.setitem(sys.modules, "langchain_openai", fake_module)
+
+    settings = AgentLensSettings(
+        _env_file=None,
+        zhipu_api_key="zp-test-key",
+        zhipu_api_base="https://open.bigmodel.cn",
+        agent_model="zhipu:glm-4-plus",
+        judge_model="zhipu:glm-4-plus",
+    )
+
+    model = create_chat_llm(settings, settings.agent_model, temperature=0.1, max_tokens=300)
+
+    assert isinstance(model, FakeChatOpenAI)
+    assert captured["model"] == "glm-4-plus"
+    assert captured["api_key"] == "zp-test-key"
+    assert captured["base_url"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert captured["temperature"] == 0.1
+    assert captured["max_tokens"] == 300

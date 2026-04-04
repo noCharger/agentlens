@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from agentlens.model_selection import required_api_key_env, resolve_model_selection
 from agentlens.openrouter import _normalize_openrouter_api_base
+from agentlens.zhipu import _normalize_zhipu_api_base
 
 if TYPE_CHECKING:
     from agentlens.config import AgentLensSettings
@@ -81,6 +82,29 @@ def create_chat_llm(
         if extra_headers:
             kwargs["default_headers"] = extra_headers
 
+        return ChatOpenAI(**kwargs)
+
+    if selection.provider == "zhipu":
+        if not settings.zhipu_api_key:
+            raise ValueError(
+                f"{required_api_key_env(selection.provider)} is required for model '{selection.label}'."
+            )
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError as exc:  # pragma: no cover - depends on optional install
+            raise RuntimeError(
+                "Zhipu support requires the 'langchain-openai' package. "
+                "Install project dependencies again after updating pyproject.toml."
+            ) from exc
+
+        kwargs: dict[str, Any] = {
+            "model": selection.model_name,
+            "api_key": settings.zhipu_api_key,
+            "base_url": _normalize_zhipu_api_base(settings.zhipu_api_base),
+            "temperature": temperature,
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         return ChatOpenAI(**kwargs)
 
     raise ValueError(f"Unsupported model provider '{selection.provider}'.")

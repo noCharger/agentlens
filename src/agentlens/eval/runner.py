@@ -292,9 +292,13 @@ def execute_and_eval(
     instrumentor = instrument_langchain(provider)
 
     # Run agent with retries for transient errors
-    result = _invoke_agent_with_retries(
-        settings, actual_preset, scenario, provider, instrumentor,
-    )
+    try:
+        result = _invoke_agent_with_retries(
+            settings, actual_preset, scenario, provider, instrumentor,
+        )
+    except KeyboardInterrupt:
+        _teardown(provider, instrumentor)
+        raise
     if isinstance(result, EvalResult):
         return result
 

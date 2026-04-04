@@ -26,6 +26,7 @@ from agentlens.dataset.builder import (
 )
 from agentlens.deepseek import DeepSeekPreflightError, validate_deepseek_preflight
 from agentlens.openrouter import OpenRouterPreflightError, validate_openrouter_preflight
+from agentlens.zhipu import ZhipuPreflightError, validate_zhipu_preflight
 from agentlens.eval.benchmarks import (
     UNASSIGNED_BENCHMARK,
     collect_benchmark_inventory,
@@ -370,7 +371,7 @@ def main():
         type=str,
         help=(
             "Override agent model, for example gemini:gemini-2.5-flash, "
-            "deepseek:deepseek-chat, or openrouter:openai/gpt-4o-mini"
+            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, or zhipu:glm-4-plus"
         ),
     )
     parser.add_argument(
@@ -378,7 +379,7 @@ def main():
         type=str,
         help=(
             "Override judge model, for example gemini:gemini-2.5-flash-lite, "
-            "deepseek:deepseek-chat, or openrouter:openai/gpt-4o-mini"
+            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, or zhipu:glm-4-plus"
         ),
     )
     parser.add_argument(
@@ -486,6 +487,7 @@ def main():
         console.print(f"[red]Failed to load settings: {e}[/red]")
         console.print(
             "[yellow]Set GOOGLE_API_KEY and/or DEEPSEEK_API_KEY and/or OPENROUTER_API_KEY "
+            "and/or ZHIPU_API_KEY "
             "in .env or environment[/yellow]"
         )
         sys.exit(1)
@@ -520,12 +522,27 @@ def main():
             f"[dim]OpenRouter key check passed ({openrouter_summary.formatted_status})[/dim]"
         )
 
+    try:
+        zhipu_summary = validate_zhipu_preflight(
+            settings,
+            require_judge=args.level2,
+        )
+    except ZhipuPreflightError as e:
+        console.print(f"[red]Zhipu preflight failed:[/red] {e}")
+        sys.exit(1)
+
+    if zhipu_summary is not None:
+        console.print(
+            f"[dim]Zhipu key check passed ({zhipu_summary.formatted_status})[/dim]"
+        )
+
     console.print(f"\nRunning [bold]{len(scenarios)}[/bold] scenarios with [cyan]{settings.agent_model}[/cyan]")
     if args.level2:
         console.print(f"L2 judge: [cyan]{settings.judge_model}[/cyan]")
     console.print()
 
     results: list[EvalResult] = []
+    interrupted_by_user = False
     for i, scenario in enumerate(scenarios, 1):
         console.print(f"[{i}/{len(scenarios)}] [cyan]{scenario.id}[/cyan]: {scenario.name}...", end=" ")
 
@@ -534,6 +551,14 @@ def main():
                 scenario=scenario, settings=settings,
                 preset=args.preset, with_level2=args.level2,
             )
+        except KeyboardInterrupt:
+            interrupted_by_user = True
+            console.print("[yellow]INTERRUPTED[/yellow]")
+            console.print(
+                f"  [yellow]Interrupted by user (Ctrl+C). "
+                f"Keeping {len(results)} completed result(s) for reporting.[/yellow]"
+            )
+            break
         except QuotaExhaustedError:
             console.print("[red]QUOTA EXHAUSTED[/red]")
             remaining = [s.id for s in scenarios[i:]]
@@ -572,7 +597,8 @@ def main():
 
     if args.output:
         generate_report(results, output_path=args.output)
-        console.print(f"\n[green]Report saved to {args.output}[/green]")
+        status = "partial report" if interrupted_by_user else "report"
+        console.print(f"\n[green]{status.capitalize()} saved to {args.output}[/green]")
 
     _handle_platform_outputs(args, results, settings, dataset_version=dataset_version)
 

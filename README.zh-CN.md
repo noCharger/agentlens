@@ -5,7 +5,7 @@
 AgentLens 是一个用于评估 AI Agent 行为的轻量平台，包含四部分能力：
 
 - 运行 agent：基于 LangGraph + LangChain 执行任务
-- 模型选择：支持 Gemini 和 DeepSeek，并且可以分别选择 agent / judge 模型
+- 模型选择：支持 Gemini、DeepSeek、OpenRouter、Zhipu，可分别选择 agent / judge 模型
 - 评估结果：支持确定性规则检查、LLM-as-Judge 和 HTML 报告
 - 观测数据：通过 OpenTelemetry 导出 trace 和 metrics
 
@@ -140,8 +140,10 @@ pip install -e ".[dev,benchmarks]"
 GOOGLE_API_KEY=your_google_ai_studio_key
 DEEPSEEK_API_KEY=your_deepseek_api_key
 OPENROUTER_API_KEY=your_openrouter_api_key
+ZHIPU_API_KEY=your_zhipu_api_key
 DEEPSEEK_API_BASE=https://api.deepseek.com
 OPENROUTER_API_BASE=https://openrouter.ai/api/v1
+ZHIPU_API_BASE=https://open.bigmodel.cn/api/paas/v4
 OPENROUTER_HTTP_REFERER=https://your-app.example
 OPENROUTER_X_TITLE=AgentLens
 AGENT_MODEL=gemini:gemini-2.5-flash
@@ -158,6 +160,7 @@ AGENT_MAX_STEPS=10
 - `GOOGLE_API_KEY` 只在选择 Gemini 模型时需要
 - `DEEPSEEK_API_KEY` 只在选择 DeepSeek 模型时需要
 - `OPENROUTER_API_KEY` 只在选择 OpenRouter 模型时需要
+- `ZHIPU_API_KEY` 只在选择 Zhipu 模型时需要
 - `JUDGE_MODEL` 只在 `--level2` 时使用
 - `AGENT_MAX_TOKENS` 用于限制 Agent 输出 token（OpenRouter 低额度 key 很关键）
 - `JUDGE_MAX_TOKENS` 用于限制 L2 judge 输出 token（OpenRouter 低额度 key 特别有用）
@@ -169,7 +172,7 @@ AGENT_MAX_STEPS=10
 `AGENT_MODEL` 和 `JUDGE_MODEL` 都支持两种写法：
 
 - 显式 provider：`gemini:gemini-2.5-flash`
-- 直接写模型名：`deepseek-chat`
+- 直接写模型名（例如 `deepseek-chat` 或 `glm-4-plus`）
 - 带命名空间的模型名（例如 `openai/gpt-4o-mini`）会自动推断为 OpenRouter
 
 推荐始终显式写 provider，这样更清楚，也更方便在多 provider 间切换。
@@ -191,6 +194,11 @@ AGENT_MODEL=openrouter:openai/gpt-4o-mini
 JUDGE_MODEL=openrouter:openai/gpt-4o-mini
 ```
 
+```bash
+AGENT_MODEL=zhipu:glm-4-plus
+JUDGE_MODEL=zhipu:glm-4-plus
+```
+
 也可以混搭：
 
 ```bash
@@ -210,9 +218,10 @@ JUDGE_MODEL=openrouter:openai/gpt-4o-mini
 说明：
 
 - `deepseek:deepseek-chat` 适合作为通用工具调用 agent 的默认选择
-- judge 侧可以用 Gemini、DeepSeek 或 OpenRouter
+- judge 侧可以用 Gemini、DeepSeek、OpenRouter 或 Zhipu
 - 如果选中了 DeepSeek，AgentLens 会在真正开跑前先做一次余额预检；余额不足时会直接提前报错
 - 如果选中了 OpenRouter，AgentLens 会在开跑前做一次 key 预检；鉴权或额度异常会提前报错
+- 如果选中了 Zhipu，AgentLens 会在开跑前校验 key/base-url 配置
 
 ## 本地开发命令
 

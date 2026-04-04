@@ -358,5 +358,10 @@ class GuardedShellTool(ShellTool):
         commands,
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> str:
-        validate_shell_commands(commands, self.shell_policy)
+        try:
+            validate_shell_commands(commands, self.shell_policy)
+        except SandboxViolationError as exc:
+            # Return a normal tool response so the agent can recover with an
+            # alternative command instead of aborting the whole scenario.
+            return f"SandboxViolation: {exc}"
         return super()._run(commands=commands, run_manager=run_manager)

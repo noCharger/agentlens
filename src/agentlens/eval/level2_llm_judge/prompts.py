@@ -30,5 +30,6 @@ Dimension: {dimension}
 
 ## Instructions
 Score the agent on the "{dimension}" dimension (1-5).
+The score must be an integer from 1 to 5 (never 0).
 Respond with this exact JSON format:
 {{"dimension": "{dimension}", "score": <1-5>, "explanation": "<brief explanation>"}}"""

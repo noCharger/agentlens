@@ -10,6 +10,7 @@ class AgentLensSettings(BaseSettings):
     google_api_key: str | None = Field(default=None, description="Google AI Studio API key")
     deepseek_api_key: str | None = Field(default=None, description="DeepSeek API key")
     openrouter_api_key: str | None = Field(default=None, description="OpenRouter API key")
+    zhipu_api_key: str | None = Field(default=None, description="Zhipu API key")
     deepseek_api_base: str = Field(
         default="https://api.deepseek.com",
         description="DeepSeek API base URL",
@@ -17,6 +18,10 @@ class AgentLensSettings(BaseSettings):
     openrouter_api_base: str = Field(
         default="https://openrouter.ai/api/v1",
         description="OpenRouter API base URL (OpenAI-compatible)",
+    )
+    zhipu_api_base: str = Field(
+        default="https://open.bigmodel.cn/api/paas/v4",
+        description="Zhipu API base URL (OpenAI-compatible)",
     )
     openrouter_http_referer: str | None = Field(
         default=None,
@@ -30,7 +35,7 @@ class AgentLensSettings(BaseSettings):
         default=DEFAULT_AGENT_MODEL,
         description=(
             "Agent model selection, for example gemini:gemini-2.5-flash, "
-            "deepseek:deepseek-chat, or openrouter:openai/gpt-4o-mini"
+            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, or zhipu:glm-4-plus"
         ),
     )
     agent_max_tokens: int = Field(
@@ -42,7 +47,7 @@ class AgentLensSettings(BaseSettings):
         default=DEFAULT_JUDGE_MODEL,
         description=(
             "Judge model selection, for example gemini:gemini-2.5-flash-lite, "
-            "deepseek:deepseek-chat, or openrouter:openai/gpt-4o-mini"
+            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, or zhipu:glm-4-plus"
         ),
     )
     judge_max_tokens: int = Field(

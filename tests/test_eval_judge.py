@@ -150,6 +150,18 @@ def test_parse_judge_response_list_content_blocks():
     assert result.score == 5
 
 
+def test_parse_judge_response_clamps_zero_score_to_one():
+    text = '{"dimension":"accuracy","score":0,"explanation":"bad"}'
+    result = _parse_judge_response(text, "accuracy")
+    assert result.score == 1
+
+
+def test_parse_judge_response_clamps_large_score_to_five():
+    text = '{"dimension":"accuracy","score":9,"explanation":"great"}'
+    result = _parse_judge_response(text, "accuracy")
+    assert result.score == 5
+
+
 # --- Judge Scenario (mocked LLM) ---
 
 

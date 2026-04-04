@@ -5,6 +5,7 @@ from agentlens.eval.scenarios import ExpectedResult, Scenario
 from agentlens.sandbox import (
     BENCHMARK_SANDBOX_PROFILES,
     BenchmarkSandboxProfile,
+    GuardedShellTool,
     build_shell_sandbox_policy,
     prepare_benchmark_environment,
     validate_shell_commands,
@@ -133,3 +134,14 @@ def test_validate_shell_commands_still_blocks_pip_in_compound_segment(tmp_path):
     policy = build_shell_sandbox_policy(scenario, workspace_root=tmp_path)
     with pytest.raises(SandboxViolationError, match="blocked"):
         validate_shell_commands("python3 -c \"print('ok')\"; pip install pandas", policy)
+
+
+def test_guarded_shell_tool_returns_violation_message_for_blocked_command(tmp_path):
+    scenario = _make_scenario()
+    policy = build_shell_sandbox_policy(scenario, workspace_root=tmp_path)
+    tool = GuardedShellTool(shell_policy=policy)
+
+    result = tool._run("open /tmp/demo.txt")
+
+    assert "SandboxViolation" in result
+    assert "blocked in benchmark sandbox mode" in result

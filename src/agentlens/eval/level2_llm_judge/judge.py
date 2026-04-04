@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -66,9 +67,37 @@ def _parse_judge_response(text: str, dimension: str) -> JudgeScore:
 
     return JudgeScore(
         dimension=data.get("dimension", dimension),
-        score=int(data["score"]),
+        score=_normalize_judge_score(data.get("score")),
         explanation=data.get("explanation", ""),
     )
+
+
+def _normalize_judge_score(raw_score: object) -> int:
+    if raw_score is None:
+        raise ValueError("Judge response is missing required field 'score'.")
+
+    numeric_source: object = raw_score
+    if isinstance(raw_score, str):
+        match = re.search(r"-?\d+(?:\.\d+)?", raw_score)
+        if match:
+            numeric_source = match.group(0)
+
+    try:
+        numeric = float(numeric_source)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Judge response score is not numeric: {raw_score!r}"
+        ) from exc
+
+    if not math.isfinite(numeric):
+        raise ValueError(f"Judge response score is not finite: {raw_score!r}")
+
+    rounded = int(round(numeric))
+    if rounded < 1:
+        return 1
+    if rounded > 5:
+        return 5
+    return rounded
 
 
 def _normalize_judge_response_text(raw: object) -> str:

@@ -142,8 +142,10 @@ A minimal example:
 GOOGLE_API_KEY=your_google_ai_studio_key
 DEEPSEEK_API_KEY=your_deepseek_api_key
 OPENROUTER_API_KEY=your_openrouter_api_key
+ZHIPU_API_KEY=your_zhipu_api_key
 DEEPSEEK_API_BASE=https://api.deepseek.com
 OPENROUTER_API_BASE=https://openrouter.ai/api/v1
+ZHIPU_API_BASE=https://open.bigmodel.cn/api/paas/v4
 OPENROUTER_HTTP_REFERER=https://your-app.example
 OPENROUTER_X_TITLE=AgentLens
 AGENT_MODEL=gemini:gemini-2.5-flash
@@ -160,6 +162,7 @@ Notes:
 - `GOOGLE_API_KEY` is only required when you select a Gemini model.
 - `DEEPSEEK_API_KEY` is only required when you select a DeepSeek model.
 - `OPENROUTER_API_KEY` is only required when you select an OpenRouter model.
+- `ZHIPU_API_KEY` is only required when you select a Zhipu model.
 - `JUDGE_MODEL` is only used when `--level2` is enabled.
 - `AGENT_MAX_TOKENS` limits agent output tokens (important for low-credit OpenRouter keys).
 - `JUDGE_MAX_TOKENS` limits L2 judge output tokens (useful for low-credit OpenRouter keys).
@@ -171,7 +174,7 @@ Notes:
 `AGENT_MODEL` and `JUDGE_MODEL` both support:
 
 - Explicit provider syntax: `gemini:gemini-2.5-flash`
-- Bare model names: `deepseek-chat`
+- Bare model names (for example `deepseek-chat` or `glm-4-plus`)
 - Namespaced model names (for example `openai/gpt-4o-mini`) are inferred as OpenRouter
 
 Explicit provider syntax is recommended because it is clearer and avoids ambiguity.
@@ -193,6 +196,11 @@ AGENT_MODEL=openrouter:openai/gpt-4o-mini
 JUDGE_MODEL=openrouter:openai/gpt-4o-mini
 ```
 
+```bash
+AGENT_MODEL=zhipu:glm-4-plus
+JUDGE_MODEL=zhipu:glm-4-plus
+```
+
 Mixed setup:
 
 ```bash
@@ -212,9 +220,10 @@ Temporary CLI override:
 Notes:
 
 - `deepseek:deepseek-chat` is a good default for general tool-using agent runs.
-- The judge can use Gemini, DeepSeek, or OpenRouter.
+- The judge can use Gemini, DeepSeek, OpenRouter, or Zhipu.
 - When a DeepSeek model is selected, AgentLens performs a balance preflight check before running scenarios. If the account has insufficient balance, the command fails early with a clear error.
 - When an OpenRouter model is selected, AgentLens performs a key preflight check before running scenarios and fails early on auth/credit issues.
+- When a Zhipu model is selected, AgentLens validates key/base-url configuration before running scenarios.
 
 ## Local Development Commands
 
