@@ -27,6 +27,10 @@ def _metric_value(eval_run: EvalRunRecord, metric_key: str) -> float:
         return float(eval_run.summary.passed)
     if metric_key == "total_cases":
         return float(eval_run.summary.total)
+    if metric_key == "partial_success_cases":
+        return float(eval_run.summary.partial_success)
+    if metric_key == "risky_success_cases":
+        return float(eval_run.summary.risky_success)
     raise ValueError(f"Unsupported alert metric_key '{metric_key}'")
 
 

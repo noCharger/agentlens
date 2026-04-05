@@ -31,6 +31,8 @@ REPORT_TEMPLATE = Template("""\
   tr:hover { background: #f0f0f5; }
   .badge { padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
   .badge-pass { background: #dcfce7; color: #166534; }
+  .badge-partial { background: #fef9c3; color: #854d0e; }
+  .badge-risky { background: #ffedd5; color: #9a3412; }
   .badge-fail { background: #fee2e2; color: #991b1b; }
   details { margin: 0.5rem 0; }
   summary { cursor: pointer; font-weight: bold; }
@@ -50,6 +52,14 @@ REPORT_TEMPLATE = Template("""\
   <div class="card">
     <h3>Passed</h3>
     <div class="value pass">{{ passed }}</div>
+  </div>
+  <div class="card">
+    <h3>Partial</h3>
+    <div class="value" style="color: #854d0e;">{{ partial_success }}</div>
+  </div>
+  <div class="card">
+    <h3>Risky</h3>
+    <div class="value" style="color: #9a3412;">{{ risky_success }}</div>
   </div>
   <div class="card">
     <h3>Failed</h3>
@@ -115,7 +125,7 @@ REPORT_TEMPLATE = Template("""\
     <td><span class="badge {{ 'badge-pass' if r.level1.tool_usage.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.tool_usage.passed else 'FAIL' }}</span></td>
     <td><span class="badge {{ 'badge-pass' if r.level1.output_format.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.output_format.passed else 'FAIL' }}</span></td>
     <td><span class="badge {{ 'badge-pass' if r.level1.trajectory.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.trajectory.passed else 'FAIL' }}</span></td>
-    <td><span class="badge {{ 'badge-pass' if r.passed else 'badge-fail' }}">{{ 'PASS' if r.passed else 'FAIL' }}</span></td>
+    <td><span class="badge {% if r.status.value == 'passed' %}badge-pass{% elif r.status.value == 'partial_success' %}badge-partial{% elif r.status.value == 'risky_success' %}badge-risky{% else %}badge-fail{% endif %}">{{ r.status.value | upper }}</span></td>
     <td>
       <details>
         <summary>Details</summary>
@@ -144,6 +154,12 @@ REPORT_TEMPLATE = Template("""\
           <p>&nbsp;&nbsp;{{ dim }}: {{ score }}/5</p>
           {% endfor %}
           {% endif %}
+          {% if r.risk_signals %}
+          <p><strong>Risk Signals:</strong></p>
+          {% for signal in r.risk_signals %}
+          <p class="reason" style="color: #9a3412;">&nbsp;&nbsp;⚠ {{ signal }}</p>
+          {% endfor %}
+          {% endif %}
           {% if r.error %}
           <p class="reason">Error: {{ r.error }}</p>
           {% endif %}
@@ -160,9 +176,13 @@ REPORT_TEMPLATE = Template("""\
 
 
 def generate_report(results: list[EvalResult], output_path: Path | None = None) -> str:
+    from agentlens.core.models import TraceStatus
+
     total = len(results)
-    passed = sum(1 for r in results if r.passed)
-    failed = total - passed
+    passed = sum(1 for r in results if r.status == TraceStatus.PASSED)
+    partial_success = sum(1 for r in results if r.status == TraceStatus.PARTIAL_SUCCESS)
+    risky_success = sum(1 for r in results if r.status == TraceStatus.RISKY_SUCCESS)
+    failed = total - passed - partial_success - risky_success
     pass_rate = round(passed / total * 100, 1) if total > 0 else 0
     benchmark_summaries = [
         summary
@@ -174,6 +194,8 @@ def generate_report(results: list[EvalResult], output_path: Path | None = None) 
         generated_at=datetime.now().isoformat(timespec="seconds"),
         total=total,
         passed=passed,
+        partial_success=partial_success,
+        risky_success=risky_success,
         failed=failed,
         pass_rate=pass_rate,
         benchmarks_covered=len(benchmark_summaries),

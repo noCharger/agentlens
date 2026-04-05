@@ -28,7 +28,13 @@ def trace_capture():
 
 def test_agent_run_span_basic(trace_capture):
     exporter = trace_capture
-    with agent_run_span(scenario_id="tc-001", query="test query") as span:
+    with agent_run_span(
+        scenario_id="tc-001",
+        query="test query",
+        benchmark="swe-bench-pro",
+        category="qa",
+        evaluation_mode="deterministic",
+    ) as span:
         finalize_run_span(span, total_steps=3, success=True, output="result")
 
     spans = exporter.get_finished_spans()
@@ -36,6 +42,9 @@ def test_agent_run_span_basic(trace_capture):
     s = spans[0]
     assert s.name == "agent.run"
     assert s.attributes["agent.scenario_id"] == "tc-001"
+    assert s.attributes["agent.benchmark"] == "swe-bench-pro"
+    assert s.attributes["agent.category"] == "qa"
+    assert s.attributes["eval.evaluation_mode"] == "deterministic"
     assert s.attributes["agent.input_query"] == "test query"
     assert s.attributes["agent.total_steps"] == 3
     assert s.attributes["agent.success"] is True

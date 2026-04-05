@@ -128,6 +128,26 @@ def test_build_eval_run_record_summarizes_pass_rate():
     assert run.agent_model == "gemini:gemini-2.5-flash"
 
 
+def test_build_eval_run_record_preserves_semantic_statuses():
+    passed = _make_result()
+    risky = _make_result()
+    risky.risk_signals = ["unexpected_privileged_tool:shell"]
+    partial = _make_result(passed=False)
+    partial.level1.tool_usage.passed = False
+    partial.level1.output_format.passed = True
+    partial.level1.trajectory.passed = True
+
+    run = build_eval_run_record([passed, risky, partial], name="nightly")
+
+    assert run.summary.passed == 1
+    assert run.summary.risky_success == 1
+    assert run.summary.partial_success == 1
+    assert run.summary.failed == 0
+    assert run.cases[1].status == TraceStatus.RISKY_SUCCESS
+    assert run.cases[1].risk_signals == ["unexpected_privileged_tool:shell"]
+    assert run.cases[2].status == TraceStatus.PARTIAL_SUCCESS
+
+
 def test_build_annotation_tasks_defaults_to_failed_cases_only():
     passed = _make_result()
     failed = _make_result(

@@ -14,6 +14,8 @@ def utc_now() -> datetime:
 
 class TraceStatus(str, Enum):
     PASSED = "passed"
+    PARTIAL_SUCCESS = "partial_success"
+    RISKY_SUCCESS = "risky_success"
     FAILED = "failed"
     ERROR = "error"
 
@@ -126,8 +128,10 @@ class EvalCaseRecord(BaseModel):
     category: str
     evaluation_mode: str
     passed: bool
+    status: TraceStatus = TraceStatus.FAILED
     level1_passed: bool
     judge_overall_score: float | None = None
+    risk_signals: list[str] = Field(default_factory=list)
     error: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
 
@@ -135,6 +139,8 @@ class EvalCaseRecord(BaseModel):
 class EvalRunSummary(BaseModel):
     total: int
     passed: int
+    partial_success: int = 0
+    risky_success: int = 0
     failed: int
     pass_rate: float
     benchmarks: list[str] = Field(default_factory=list)

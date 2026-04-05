@@ -24,6 +24,7 @@ services:
     image: prom/prometheus:v3.4.1
     volumes:
       - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus-alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"

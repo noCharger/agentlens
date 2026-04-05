@@ -1,0 +1,70 @@
+groups:
+  - name: agentlens_alerts
+    rules:
+      # Semantic eval pass rate drops below 50%
+      - alert: AgentSuccessRateLow
+        expr: |
+          (
+            sum(traces_span_metrics_calls_total{span_name="agent.run", eval_status=~"passed|risky_success"})
+            / sum(traces_span_metrics_calls_total{span_name="agent.run"})
+          ) * 100 < 50
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Eval pass rate below 50%"
+          description: "Eval pass rate is {{ $value | printf \"%.1f\" }}% (threshold: 50%)"
+
+      # LLM p95 latency exceeds 30 seconds
+      - alert: LLMLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(traces_span_metrics_duration_milliseconds_bucket{
+              span_name=~"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic"
+            }[10m])) by (le)
+          ) > 30000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM p95 latency exceeds 30s"
+          description: "LLM p95 latency is {{ $value | printf \"%.0f\" }}ms"
+
+      # Tool error rate exceeds 20%
+      - alert: ToolErrorRateHigh
+        expr: |
+          (
+            sum(rate(traces_span_metrics_calls_total{tool_name!="", status_code="STATUS_CODE_ERROR"}[10m]))
+            / sum(rate(traces_span_metrics_calls_total{tool_name!=""}[10m]))
+          ) * 100 > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool error rate exceeds 20%"
+          description: "Tool error rate is {{ $value | printf \"%.1f\" }}%"
+
+      # No evaluated runs in the last 30 minutes
+      - alert: AgentRunsStalled
+        expr: |
+          sum(increase(traces_span_metrics_calls_total{span_name="agent.run"}[30m])) == 0
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "No eval runs in the last 30 minutes"
+          description: "Agent eval pipeline may be stalled or idle"
+
+      # LLM calls returning errors
+      - alert: LLMErrorSpike
+        expr: |
+          sum(rate(traces_span_metrics_calls_total{
+            span_name=~"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic",
+            status_code="STATUS_CODE_ERROR"
+          }[10m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM error rate spike detected"
+          description: "LLM errors at {{ $value | printf \"%.2f\" }} errors/sec"

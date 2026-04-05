@@ -277,7 +277,10 @@ class CoreApiService:
         )
 
     def _validate_alert_rule(self, rule: AlertRuleRecord) -> None:
-        allowed_metrics = {"pass_rate", "failed_cases", "passed_cases", "total_cases"}
+        allowed_metrics = {
+            "pass_rate", "failed_cases", "passed_cases", "total_cases",
+            "partial_success_cases", "risky_success_cases",
+        }
         allowed_operators = {">", ">=", "<", "<=", "=="}
         if rule.metric_key not in allowed_metrics:
             raise ValueError(

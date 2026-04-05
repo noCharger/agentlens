@@ -89,6 +89,30 @@ agentlens/
 └── pyproject.toml
 ```
 
+## 可观测性栈
+
+本地启动监控组件：
+
+```bash
+docker compose up -d
+```
+
+近期更新：
+
+- Grafana/Prometheus 的 LLM 指标改为 provider 通配匹配：
+  `span_name=~"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic"`
+- `agent.run` 现在是带 eval 语义的根 span：
+  原始执行 trace 保留在同一条链路里，评估得到的语义信号会回写成 root span attributes/events 和 Prometheus metrics
+- 新增面板：
+  `Eval Outcome Mix`、`Risk Signals by Type`、`Failure Patterns`、`Judge Score by Dimension`，
+  同时保留 `LLM Calls by Provider`、`LLM Latency by Provider`、`Trace Duration Distribution`、`Slowest Operations`
+- `Recent Traces` 表格扩展为全宽，支持点击 Trace ID 跳转到 Grafana Explore 查看完整 trace
+- Tempo datasource 启用了 `nodeGraph`、trace search、traces-to-metrics 关联
+- OTEL Collector 增加了 `openinference.span.kind`、`eval.status`、`agent.benchmark` 等维度提取
+- Prometheus 告警规则在 [`infra/prometheus-alerts.yml`](infra/prometheus-alerts.yml)，并通过 [`infra/prometheus.yml`](infra/prometheus.yml) 加载
+
+PromQL/TraceQL 示例与告警说明见 [`infra/README.md`](infra/README.md)。
+
 ## 环境准备
 
 要求：

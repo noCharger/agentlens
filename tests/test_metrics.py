@@ -35,7 +35,7 @@ def _get_metric_attributes(reader: InMemoryMetricReader, name: str) -> dict | No
 
 def test_record_agent_run_success():
     m, reader = _make_metrics()
-    m.record_agent_run(success=True, scenario_id="tc-001")
+    m.record_agent_run(success=True, benchmark="swe-bench-pro", category="qa")
 
     total = _get_metric_value(reader, "agent.runs.total")
     success = _get_metric_value(reader, "agent.runs.success")
@@ -55,10 +55,50 @@ def test_record_agent_run_failure():
 
 def test_record_agent_run_includes_benchmark_attribute():
     m, reader = _make_metrics()
-    m.record_agent_run(success=True, scenario_id="tc-001", benchmark="swe-bench-pro")
+    m.record_agent_run(
+        success=True,
+        benchmark="swe-bench-pro",
+        category="qa",
+        evaluation_mode="deterministic",
+    )
 
     attrs = _get_metric_attributes(reader, "agent.runs.total")
-    assert attrs == {"scenario_id": "tc-001", "benchmark": "swe-bench-pro"}
+    assert attrs == {
+        "benchmark": "swe-bench-pro",
+        "category": "qa",
+        "evaluation_mode": "deterministic",
+    }
+
+
+def test_record_eval_outcome():
+    m, reader = _make_metrics()
+    m.record_eval_outcome(
+        "risky_success",
+        benchmark="swe-bench-pro",
+        category="qa",
+        evaluation_mode="llm_judge",
+    )
+
+    total = _get_metric_value(reader, "eval.outcomes.total")
+    attrs = _get_metric_attributes(reader, "eval.outcomes.total")
+    assert total == 1
+    assert attrs == {
+        "eval.status": "risky_success",
+        "benchmark": "swe-bench-pro",
+        "category": "qa",
+        "evaluation_mode": "llm_judge",
+    }
+
+
+def test_record_risk_signal_and_failure_pattern():
+    m, reader = _make_metrics()
+    m.record_risk_signal("unexpected_privileged_tool", benchmark="bench", category="ops")
+    m.record_failure_pattern("loop_trap", severity="high", benchmark="bench", category="ops")
+
+    risk_total = _get_metric_value(reader, "eval.risk_signals.total")
+    failure_total = _get_metric_value(reader, "eval.failure_patterns.total")
+    assert risk_total == 1
+    assert failure_total == 1
 
 
 def test_record_tool_call():
@@ -93,3 +133,18 @@ def test_record_llm_call():
     assert "llm.latency_seconds" in metric_names
     assert "llm.tokens.prompt" in metric_names
     assert "llm.tokens.completion" in metric_names
+
+
+def test_record_eval_judge_score_and_risk_count():
+    m, reader = _make_metrics()
+    m.record_risk_signal_count(2, benchmark="bench")
+    m.record_judge_score(4.5, dimension="overall", benchmark="bench")
+
+    data = reader.get_metrics_data()
+    metric_names = set()
+    for rm in data.resource_metrics:
+        for sm in rm.scope_metrics:
+            for metric in sm.metrics:
+                metric_names.add(metric.name)
+    assert "eval.risk_signal.count" in metric_names
+    assert "eval.judge.score" in metric_names

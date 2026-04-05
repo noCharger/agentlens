@@ -90,6 +90,30 @@ agentlens/
 └── pyproject.toml
 ```
 
+## Observability Stack
+
+For local monitoring:
+
+```bash
+docker compose up -d
+```
+
+Recent updates:
+
+- LLM metrics are provider-agnostic in Grafana and Prometheus using:
+  `span_name=~"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic"`
+- `agent.run` now acts as the eval-enriched root span:
+  raw execution spans stay in the trace, while semantic eval signals are emitted back as root-span attributes/events and Prometheus metrics
+- New dashboard panels include:
+  `Eval Outcome Mix`, `Risk Signals by Type`, `Failure Patterns`, `Judge Score by Dimension`,
+  alongside `LLM Calls by Provider`, `LLM Latency by Provider`, `Trace Duration Distribution`, `Slowest Operations`
+- `Recent Traces` now uses full width and includes click-through trace links to Grafana Explore
+- Tempo datasource enables `nodeGraph`, trace search, and traces-to-metrics linking
+- OTEL Collector now extracts `openinference.span.kind`, `eval.status`, `agent.benchmark`, and related dimensions for span-metrics queries
+- Prometheus alert rules live in [`infra/prometheus-alerts.yml`](infra/prometheus-alerts.yml) and are loaded by [`infra/prometheus.yml`](infra/prometheus.yml)
+
+For sample PromQL/TraceQL queries and alert details, see [`infra/README.md`](infra/README.md).
+
 ## Environment Setup
 
 Requirements:

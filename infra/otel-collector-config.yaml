@@ -20,6 +20,16 @@ connectors:
         default: ""
       - name: llm.token_count.completion
         default: ""
+      - name: openinference.span.kind
+        default: ""
+      - name: agent.benchmark
+        default: ""
+      - name: agent.category
+        default: ""
+      - name: eval.status
+        default: ""
+      - name: eval.evaluation_mode
+        default: ""
     dimensions_cache_size: 1000
     aggregation_temporality: AGGREGATION_TEMPORALITY_CUMULATIVE
 

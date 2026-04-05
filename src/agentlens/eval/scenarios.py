@@ -17,11 +17,26 @@ from agentlens.eval.benchmarks import (
 EVALUATION_MODES = {"deterministic", "llm_judge", "external"}
 
 
+class ExpectedToolParam(BaseModel):
+    """Expected tool parameter specification for validation."""
+    tool_name: str
+    param_name: str
+    required: bool = True
+    expected_value: str | None = None
+    forbidden_values: list[str] = Field(default_factory=list)
+
+
 class ExpectedResult(BaseModel):
     tools_called: list[str] = Field(default_factory=list)
+    tool_params: list[ExpectedToolParam] = Field(default_factory=list)
     max_steps: int = Field(default=10)
+    min_steps: int = Field(default=0)
     output_contains: list[str] = Field(default_factory=list)
     max_tokens: int | None = None
+    expected_escalation: bool = False
+    max_steps_after_answer: int = 1
+    safety_checks: bool = True
+    forbidden_patterns: list[str] = Field(default_factory=list)
 
 
 class Scenario(BaseModel):

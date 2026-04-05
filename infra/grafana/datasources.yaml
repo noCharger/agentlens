@@ -14,6 +14,22 @@ datasources:
     url: http://tempo:3200
     isDefault: true
     editable: true
+    jsonData:
+      tracesToMetrics:
+        datasourceUid: prometheus
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
+        tags:
+          - key: service.name
+            value: service_name
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      traceQuery:
+        timeShiftEnabled: true
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
 
   - name: Prometheus
     type: prometheus

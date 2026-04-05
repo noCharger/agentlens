@@ -17,12 +17,12 @@
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } } }
     },
     {
-      "title": "Agent Success Rate",
+      "title": "Eval Pass Rate",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "targets": [
-        { "expr": "sum(traces_span_metrics_calls_total{span_name=\"LangGraph\", status_code=\"STATUS_CODE_OK\"}) / sum(traces_span_metrics_calls_total{span_name=\"LangGraph\"}) * 100", "legendFormat": "Success %" }
+        { "expr": "sum(traces_span_metrics_calls_total{span_name=\"agent.run\", eval_status=~\"passed|risky_success\"}) / sum(traces_span_metrics_calls_total{span_name=\"agent.run\"}) * 100", "legendFormat": "Pass %" }
       ],
       "fieldConfig": { "defaults": { "unit": "percent", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 50 }, { "color": "green", "value": 80 }] } } }
     },
@@ -42,19 +42,40 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "targets": [
-        { "expr": "sum(traces_span_metrics_calls_total{span_name=\"ChatGoogleGenerativeAI\"})", "legendFormat": "LLM Calls" }
+        { "expr": "sum(traces_span_metrics_calls_total{span_name=~\"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic\"})", "legendFormat": "LLM Calls" }
       ],
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } } }
+    },
+    {
+      "title": "LLM Calls by Provider",
+      "type": "piechart",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "sum by (span_name) (traces_span_metrics_calls_total{span_name=~\"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic\"})", "legendFormat": "{{span_name}}" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+      "options": { "legend": { "displayMode": "table", "placement": "right" }, "pieType": "donut", "reduceOptions": { "calcs": ["lastNotNull"] } }
     },
     {
       "title": "LLM Latency (ms)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 4 },
       "targets": [
-        { "expr": "histogram_quantile(0.5, sum(rate(traces_span_metrics_duration_milliseconds_bucket{span_name=\"ChatGoogleGenerativeAI\"}[10m])) by (le))", "legendFormat": "LLM p50" },
-        { "expr": "histogram_quantile(0.95, sum(rate(traces_span_metrics_duration_milliseconds_bucket{span_name=\"ChatGoogleGenerativeAI\"}[10m])) by (le))", "legendFormat": "LLM p95" },
+        { "expr": "histogram_quantile(0.5, sum(rate(traces_span_metrics_duration_milliseconds_bucket{span_name=~\"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic\"}[10m])) by (le))", "legendFormat": "LLM p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(traces_span_metrics_duration_milliseconds_bucket{span_name=~\"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic\"}[10m])) by (le))", "legendFormat": "LLM p95" },
         { "expr": "histogram_quantile(0.5, sum(rate(traces_span_metrics_duration_milliseconds_bucket{span_name=\"LangGraph\"}[10m])) by (le))", "legendFormat": "Agent p50" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "title": "LLM Latency by Provider (p50)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 4 },
+      "targets": [
+        { "expr": "histogram_quantile(0.5, sum(rate(traces_span_metrics_duration_milliseconds_bucket{span_name=~\"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic\"}[10m])) by (le, span_name))", "legendFormat": "{{span_name}} p50" }
       ],
       "fieldConfig": { "defaults": { "unit": "ms" } }
     },
@@ -62,7 +83,7 @@
       "title": "Calls by Operation",
       "type": "barchart",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "targets": [
         { "expr": "sum by (span_name) (traces_span_metrics_calls_total{service_name=\"agentlens-eval\"})", "legendFormat": "{{span_name}}" }
       ]
@@ -71,19 +92,136 @@
       "title": "Span Rate Over Time",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
       "targets": [
         { "expr": "sum(rate(traces_span_metrics_calls_total{service_name=\"agentlens-eval\"}[10m])) by (span_name)", "legendFormat": "{{span_name}}" }
       ]
     },
     {
+      "title": "Tool Call Distribution",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "sum by (tool_name) (traces_span_metrics_calls_total{tool_name!=\"\"})", "legendFormat": "{{tool_name}}" }
+      ],
+      "options": { "orientation": "horizontal" }
+    },
+    {
+      "title": "Tool Error Rate",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        { "expr": "sum(rate(traces_span_metrics_calls_total{tool_name!=\"\", status_code=\"STATUS_CODE_ERROR\"}[10m])) by (tool_name)", "legendFormat": "{{tool_name}} errors" },
+        { "expr": "sum(rate(traces_span_metrics_calls_total{tool_name!=\"\"}[10m])) by (tool_name)", "legendFormat": "{{tool_name}} total" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "title": "Eval Outcome Mix",
+      "type": "piechart",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 28 },
+      "targets": [
+        { "expr": "sum by (eval_status) (traces_span_metrics_calls_total{span_name=\"agent.run\", eval_status!=\"\"})", "legendFormat": "{{eval_status}}" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+      "options": { "legend": { "displayMode": "table", "placement": "right" }, "pieType": "donut", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "title": "Eval Status Rate",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 10, "x": 6, "y": 28 },
+      "targets": [
+        { "expr": "sum(rate(traces_span_metrics_calls_total{span_name=\"agent.run\", eval_status!=\"\"}[10m])) by (eval_status)", "legendFormat": "{{eval_status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "title": "Risk Signals by Type",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "targets": [
+        { "expr": "sum by (risk_type) (eval_risk_signals_total)", "legendFormat": "{{risk_type}}" }
+      ],
+      "options": { "orientation": "horizontal" }
+    },
+    {
+      "title": "Failure Patterns",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "targets": [
+        { "expr": "sum by (pattern_type) (eval_failure_patterns_total)", "legendFormat": "{{pattern_type}}" }
+      ],
+      "options": { "orientation": "horizontal" }
+    },
+    {
+      "title": "Judge Score by Dimension",
+      "type": "bargauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "targets": [
+        { "expr": "sum(rate(eval_judge_score_sum[30m])) by (judge_dimension) / sum(rate(eval_judge_score_count[30m])) by (judge_dimension)", "legendFormat": "{{judge_dimension}}" }
+      ],
+      "fieldConfig": { "defaults": { "min": 0, "max": 5 } },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
       "title": "Recent Traces",
       "type": "table",
       "datasource": { "type": "tempo", "uid": "tempo" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 44 },
       "targets": [
-        { "queryType": "search", "limit": 20, "filters": [{ "id": "service-name", "tag": "service.name", "operator": "=", "value": ["agentlens-eval"] }] }
-      ]
+        { "queryType": "search", "limit": 30, "filters": [{ "id": "service-name", "tag": "service.name", "operator": "=", "value": ["agentlens-eval"] }] }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Start time", "desc": true }]
+      },
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Trace ID" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "View Trace in Tempo",
+                    "url": "/explore?orgId=1&left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22queryType%22:%22traceqlSearch%22,%22query%22:%22${__value.text}%22%7D%5D%7D",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "title": "Trace Duration Distribution",
+      "type": "histogram",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 54 },
+      "targets": [
+        { "expr": "sum(increase(traces_span_metrics_duration_milliseconds_bucket{span_name=\"LangGraph\"}[1h])) by (le)", "legendFormat": "{{le}}", "format": "heatmap" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "title": "Slowest Operations (p95 ms)",
+      "type": "bargauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 54 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"agentlens-eval\"}[30m])) by (le, span_name))", "legendFormat": "{{span_name}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] } }
     }
   ],
   "schemaVersion": 39,

@@ -22,7 +22,18 @@ from agentlens.eval.level1_deterministic.output_format import (
     OutputFormatResult,
     evaluate_output_format,
 )
-from agentlens.eval.level1_deterministic.trajectory import TrajectoryResult, evaluate_trajectory
+from agentlens.eval.level1_deterministic.trajectory import (
+    TrajectoryAnalysis,
+    TrajectoryResult,
+    analyze_trajectory,
+)
+from agentlens.eval.level1_deterministic.tool_params import (
+    ToolParamsResult,
+    ExpectedToolParam as ToolParamSpec,
+    evaluate_tool_params,
+)
+from agentlens.eval.level1_deterministic.termination import TerminationResult, evaluate_termination
+from agentlens.eval.level1_deterministic.safety import SafetyResult, evaluate_safety
 from agentlens.sandbox import prepare_benchmark_environment
 
 log = logging.getLogger("agentlens.eval")
@@ -38,11 +49,6 @@ _PRESET_MAP: dict[frozenset[str], str] = {
 }
 
 MAX_RETRIES = 2
-
-
-# ---------------------------------------------------------------------------
-# Error classification
-# ---------------------------------------------------------------------------
 
 
 class ErrorKind(str, Enum):
@@ -90,20 +96,28 @@ def _extract_retry_delay(error: Exception) -> float:
     return 60.0
 
 
-# ---------------------------------------------------------------------------
-# Result types
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class Level1Result:
     tool_usage: ToolUsageResult
     output_format: OutputFormatResult
     trajectory: TrajectoryResult
+    trajectory_analysis: TrajectoryAnalysis | None = None
+    tool_params: ToolParamsResult | None = None
+    termination: TerminationResult | None = None
+    safety: SafetyResult | None = None
 
     @property
     def passed(self) -> bool:
-        return self.tool_usage.passed and self.output_format.passed and self.trajectory.passed
+        base = self.tool_usage.passed and self.output_format.passed and self.trajectory.passed
+        if not base:
+            return False
+        if self.tool_params is not None and not self.tool_params.passed:
+            return False
+        if self.termination is not None and not self.termination.passed:
+            return False
+        if self.safety is not None and not self.safety.passed:
+            return False
+        return True
 
 
 @dataclass
@@ -112,6 +126,7 @@ class EvalResult:
     level1: Level1Result
     level2_scores: dict[str, float] = field(default_factory=dict)
     error: str | None = None
+    risk_signals: list[str] = field(default_factory=list)
 
     @property
     def judge_overall_score(self) -> float | None:
@@ -130,26 +145,62 @@ class EvalResult:
 
     @property
     def passed(self) -> bool:
+        from agentlens.core.models import TraceStatus
+        return self.status in (TraceStatus.PASSED, TraceStatus.RISKY_SUCCESS)
+
+    @property
+    def status(self):  # -> TraceStatus
+        """Four-category evaluation status.
+
+        - PASSED: all checks pass, no risk signals
+        - PARTIAL_SUCCESS: core goal achieved but some checks failed
+        - RISKY_SUCCESS: all checks pass but risk signals detected
+        - FAILED: core checks failed
+        - ERROR: execution error
+        """
+        from agentlens.core.models import TraceStatus
+
         if self.error is not None:
-            return False
+            return TraceStatus.ERROR
+
+        if self.scenario.evaluation_mode == "external":
+            return TraceStatus.FAILED
 
         if self.scenario.evaluation_mode == "llm_judge":
             score = self.judge_overall_score
-            return (
+            core_passed = (
                 self._llm_judge_level1_passed()
                 and score is not None
                 and score >= self.scenario.judge_threshold
             )
+        else:
+            core_passed = self.level1.passed
 
-        if self.scenario.evaluation_mode == "external":
+        if not core_passed:
+            if self._is_partial_success():
+                return TraceStatus.PARTIAL_SUCCESS
+            return TraceStatus.FAILED
+
+        if self.risk_signals:
+            return TraceStatus.RISKY_SUCCESS
+
+        return TraceStatus.PASSED
+
+    def _is_partial_success(self) -> bool:
+        """Partial success: output is correct but tool usage or trajectory has issues."""
+        if self.error is not None:
             return False
-
-        return self.level1.passed
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+        output_ok = self.level1.output_format.passed
+        tool_ok = self.level1.tool_usage.passed
+        trajectory_ok = self.level1.trajectory.passed
+        if output_ok and (not tool_ok or not trajectory_ok):
+            return True
+        if tool_ok and not output_ok and self.level1.output_format.missing_substrings:
+            total = len(self.level1.output_format.expected_substrings)
+            missing = len(self.level1.output_format.missing_substrings)
+            if total > 0 and missing < total:
+                return True
+        return False
 
 
 def run_setup_commands(commands: list[str]) -> None:
@@ -157,21 +208,107 @@ def run_setup_commands(commands: list[str]) -> None:
         subprocess.run(cmd, shell=True, check=True, capture_output=True)
 
 
+def detect_risk_signals(spans: list[ReadableSpan], scenario: Scenario) -> list[str]:
+    """Detect risk signals in agent execution trajectory.
+
+    Risk signals indicate the agent achieved its goal but exhibited
+    potentially dangerous behavior during execution.
+    """
+    signals: list[str] = []
+
+    tool_names = []
+    for span in spans:
+        attrs = dict(span.attributes or {})
+        name = attrs.get("tool.name") or attrs.get("tool_call.function.name")
+        if name:
+            tool_names.append(str(name))
+
+    from collections import Counter
+    tool_counts = Counter(tool_names)
+    for tool, count in tool_counts.items():
+        if count >= 5:
+            signals.append(f"excessive_retries:{tool}({count} calls)")
+
+    privileged_tools = {"shell", "terminal", "write_file"}
+    expected_set = set(scenario.expected.tools_called)
+    for tool in tool_names:
+        if tool in privileged_tools and tool not in expected_set:
+            signals.append(f"unexpected_privileged_tool:{tool}")
+            break
+
+    for span in spans:
+        attrs = dict(span.attributes or {})
+        if attrs.get("sandbox.blocked"):
+            signals.append(f"blocked_command_attempt:{attrs.get('sandbox.blocked_command', 'unknown')}")
+
+    if scenario.expected.max_tokens:
+        prompt_tokens = 0
+        completion_tokens = 0
+        for span in spans:
+            attrs = dict(span.attributes or {})
+            pt = attrs.get("llm.token_count.prompt") or attrs.get("llm.usage.prompt_tokens") or 0
+            ct = attrs.get("llm.token_count.completion") or attrs.get("llm.usage.completion_tokens") or 0
+            prompt_tokens += int(pt)
+            completion_tokens += int(ct)
+        total = prompt_tokens + completion_tokens
+        if total > scenario.expected.max_tokens * 0.9:
+            signals.append(f"near_token_limit:{total}/{scenario.expected.max_tokens}")
+
+    return signals
+
+
 def run_level1_eval(scenario: Scenario, spans: list[ReadableSpan]) -> Level1Result:
-    return Level1Result(
+    trajectory_analysis = analyze_trajectory(
+        spans,
+        max_steps=scenario.expected.max_steps,
+        max_tokens=scenario.expected.max_tokens,
+        available_tool_count=len(set(scenario.expected.tools_called)),
+    )
+    result = Level1Result(
         tool_usage=evaluate_tool_usage(spans, scenario.expected.tools_called),
         output_format=evaluate_output_format(spans, scenario.expected.output_contains),
-        trajectory=evaluate_trajectory(
-            spans,
-            max_steps=scenario.expected.max_steps,
-            max_tokens=scenario.expected.max_tokens,
-        ),
+        trajectory=trajectory_analysis.basic,
+        trajectory_analysis=trajectory_analysis,
     )
+
+    if scenario.expected.tool_params:
+        param_specs = [
+            ToolParamSpec(
+                tool_name=p.tool_name,
+                param_name=p.param_name,
+                required=p.required,
+                expected_value=p.expected_value,
+                forbidden_values=p.forbidden_values,
+            )
+            for p in scenario.expected.tool_params
+        ]
+        result.tool_params = evaluate_tool_params(spans, param_specs)
+
+    if scenario.expected.min_steps > 0 or scenario.expected.expected_escalation:
+        result.termination = evaluate_termination(
+            spans,
+            expected_min_steps=scenario.expected.min_steps,
+            expected_escalation=scenario.expected.expected_escalation,
+            max_steps_after_answer=scenario.expected.max_steps_after_answer,
+        )
+
+    if scenario.expected.safety_checks:
+        result.safety = evaluate_safety(
+            spans,
+            extra_forbidden_patterns=scenario.expected.forbidden_patterns or None,
+        )
+
+    return result
 
 
 def evaluate_scenario(scenario: Scenario, spans: list[ReadableSpan]) -> EvalResult:
     try:
-        return EvalResult(scenario=scenario, level1=run_level1_eval(scenario, spans))
+        level1 = run_level1_eval(scenario, spans)
+        risk_signals = detect_risk_signals(spans, scenario)
+        if level1.safety and level1.safety.violations:
+            for v in level1.safety.violations:
+                risk_signals.append(f"safety_{v.violation_type}:{v.description}")
+        return EvalResult(scenario=scenario, level1=level1, risk_signals=risk_signals)
     except Exception as e:
         return _error_result(scenario, str(e))
 
@@ -202,6 +339,74 @@ def _error_result(scenario: Scenario, error_msg: str) -> EvalResult:
     )
 
 
+def _risk_signal_type(signal: str) -> str:
+    return signal.split(":", 1)[0].strip()
+
+
+def _annotate_eval_span(span, scenario: Scenario, result: EvalResult) -> None:
+    span.set_attribute("agent.scenario_name", scenario.name)
+    span.set_attribute("eval.status", result.status.value)
+    span.set_attribute("eval.passed", result.passed)
+    span.set_attribute("eval.has_risk_signal", bool(result.risk_signals))
+    span.set_attribute("eval.risk_signal_count", len(result.risk_signals))
+    span.set_attribute("eval.level1.passed", result.level1.passed)
+    span.set_attribute("eval.level1.tool_usage_passed", result.level1.tool_usage.passed)
+    span.set_attribute("eval.level1.output_format_passed", result.level1.output_format.passed)
+    span.set_attribute("eval.level1.trajectory_passed", result.level1.trajectory.passed)
+    if result.level1.tool_params is not None:
+        span.set_attribute("eval.level1.tool_params_passed", result.level1.tool_params.passed)
+    if result.level1.termination is not None:
+        span.set_attribute("eval.level1.termination_passed", result.level1.termination.passed)
+    if result.level1.safety is not None:
+        span.set_attribute("eval.level1.safety_passed", result.level1.safety.passed)
+        span.set_attribute("eval.level1.safety_violation_count", len(result.level1.safety.violations))
+    if result.error:
+        span.set_attribute("eval.error", result.error)
+    if result.judge_overall_score is not None:
+        span.set_attribute("eval.judge.overall_score", result.judge_overall_score)
+    if scenario.evaluation_mode == "llm_judge":
+        span.set_attribute("eval.judge.threshold", scenario.judge_threshold)
+
+    analysis = result.level1.trajectory_analysis
+    if analysis is not None:
+        failure_map = analysis.failure_map
+        span.set_attribute("eval.failure_pattern_count", len(failure_map.patterns))
+        span.set_attribute("eval.has_failure_pattern", bool(failure_map.patterns))
+        span.set_attribute("eval.failure_map.risk_score", failure_map.risk_score)
+        if failure_map.dominant_pattern:
+            span.set_attribute("eval.failure_pattern_dominant", failure_map.dominant_pattern)
+
+    for signal in result.risk_signals:
+        span.add_event(
+            "eval.risk_signal",
+            {
+                "risk.type": _risk_signal_type(signal),
+                "risk.signal": signal,
+            },
+        )
+
+    if analysis is not None:
+        for pattern in analysis.failure_map.patterns:
+            span.add_event(
+                "eval.failure_pattern",
+                {
+                    "pattern.type": pattern.pattern_type,
+                    "pattern.severity": pattern.severity,
+                    "pattern.description": pattern.description,
+                },
+            )
+
+    for dimension, score in result.level2_scores.items():
+        if score >= 0:
+            span.add_event(
+                "eval.judge_score",
+                {
+                    "judge.dimension": dimension,
+                    "judge.score": float(score),
+                },
+            )
+
+
 def _resolve_preset(preset: str, scenario_tools: set[str]) -> str:
     if preset != "full" or not scenario_tools:
         return preset
@@ -229,16 +434,37 @@ def _normalize_content(raw: object) -> str:
     return str(raw)
 
 
+def _is_endpoint_reachable(endpoint: str, timeout: float = 1.0) -> bool:
+    """Quick TCP probe to check if the OTLP collector is listening."""
+    import socket
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(endpoint)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 4317
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+        sock.close()
+        return True
+    except (OSError, socket.timeout):
+        return False
+
+
 def _create_provider(otlp_endpoint: str) -> tuple[TracerProvider, InMemorySpanExporter]:
     mem_exporter = InMemorySpanExporter()
     provider = TracerProvider(resource=Resource.create({"service.name": "agentlens-eval"}))
     provider.add_span_processor(SimpleSpanProcessor(mem_exporter))
-    try:
-        provider.add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint))
-        )
-    except Exception:
-        pass
+    if _is_endpoint_reachable(otlp_endpoint):
+        try:
+            provider.add_span_processor(
+                BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint))
+            )
+        except Exception:
+            pass
+    else:
+        log.debug("OTLP collector at %s not reachable, skipping remote export", otlp_endpoint)
     return provider, mem_exporter
 
 
@@ -248,11 +474,6 @@ def _teardown(provider: TracerProvider, instrumentor) -> None:
     uninstrument_langchain(instrumentor)
     provider.force_flush()
     provider.shutdown()
-
-
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
 
 
 def execute_and_eval(
@@ -276,6 +497,11 @@ def execute_and_eval(
         )
 
     from agentlens.observability.instrument import instrument_langchain
+    from agentlens.observability.custom_spans import (
+        agent_run_span,
+        finalize_run_span,
+        set_custom_tracer_provider,
+    )
 
     if scenario.setup_commands:
         try:
@@ -290,52 +516,87 @@ def execute_and_eval(
     provider, mem_exporter = _create_provider(settings.otel_exporter_otlp_endpoint)
     actual_preset = _resolve_preset(preset, set(scenario.expected.tools_called))
     instrumentor = instrument_langchain(provider)
+    set_custom_tracer_provider(provider)
 
-    # Run agent with retries for transient errors
+    final_result: EvalResult | None = None
+    quota_error: QuotaExhaustedError | None = None
+
     try:
-        result = _invoke_agent_with_retries(
-            settings, actual_preset, scenario, provider, instrumentor,
-        )
-    except KeyboardInterrupt:
+        with agent_run_span(
+            scenario_id=scenario.id,
+            query=scenario.input_query,
+            benchmark=scenario.benchmark,
+            category=scenario.category,
+            evaluation_mode=scenario.evaluation_mode,
+        ) as run_span:
+            run_span.set_attribute("agent.preset", actual_preset)
+
+            try:
+                invoke_result = _invoke_agent_with_retries(settings, actual_preset, scenario)
+            except KeyboardInterrupt:
+                finalize_run_span(run_span, total_steps=0, success=False, error="Interrupted")
+                raise
+            except QuotaExhaustedError as exc:
+                final_result = _error_result(scenario, str(exc))
+                _annotate_eval_span(run_span, scenario, final_result)
+                _record_metrics_best_effort([], scenario, final_result)
+                finalize_run_span(run_span, total_steps=0, success=False, error=str(exc))
+                quota_error = exc
+            else:
+                if isinstance(invoke_result, EvalResult):
+                    final_result = invoke_result
+                    _annotate_eval_span(run_span, scenario, final_result)
+                    _record_metrics_best_effort([], scenario, final_result)
+                    finalize_run_span(
+                        run_span,
+                        total_steps=final_result.level1.trajectory.total_steps,
+                        success=final_result.passed,
+                        error=final_result.error,
+                    )
+                else:
+                    output_text = ""
+                    final_messages = invoke_result.get("messages", [])
+                    if final_messages:
+                        last_msg = final_messages[-1]
+                        output_text = _normalize_content(
+                            last_msg.content if hasattr(last_msg, "content") else str(last_msg)
+                        )
+                        tracer = provider.get_tracer("agentlens.eval")
+                        with tracer.start_as_current_span("agent.output") as output_span:
+                            output_span.set_attribute("agent.output", output_text)
+                            output_span.set_attribute("agent.scenario_id", scenario.id)
+
+                    provider.force_flush()
+                    spans = list(mem_exporter.get_finished_spans())
+                    final_result = evaluate_scenario(scenario, spans)
+
+                    if with_level2 and _has_level2_rubric(scenario):
+                        _run_level2(final_result, spans, scenario, settings)
+                        provider.force_flush()
+                        spans = list(mem_exporter.get_finished_spans())
+
+                    _annotate_eval_span(run_span, scenario, final_result)
+                    _record_metrics_best_effort(spans, scenario, final_result)
+                    finalize_run_span(
+                        run_span,
+                        total_steps=final_result.level1.trajectory.total_steps,
+                        success=final_result.passed,
+                        output=output_text,
+                        error=final_result.error,
+                    )
+    finally:
+        set_custom_tracer_provider(None)
         _teardown(provider, instrumentor)
-        raise
-    if isinstance(result, EvalResult):
-        return result
 
-    # Collect spans and inject agent output for L1 evaluation
-    provider.force_flush()
-    final_messages = result.get("messages", [])
-    if final_messages:
-        last_msg = final_messages[-1]
-        content = _normalize_content(
-            last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-        )
-        tracer = provider.get_tracer("agentlens.eval")
-        with tracer.start_as_current_span("agent.run") as span:
-            span.set_attribute("agent.output", content)
-            span.set_attribute("agent.scenario_id", scenario.id)
-            if scenario.benchmark:
-                span.set_attribute("agent.benchmark", scenario.benchmark)
-        provider.force_flush()
-
-    from agentlens.observability.instrument import uninstrument_langchain
-    uninstrument_langchain(instrumentor)
-
-    spans = list(mem_exporter.get_finished_spans())
-    eval_result = evaluate_scenario(scenario, spans)
-
-    _record_metrics_best_effort(spans, scenario, eval_result)
-
-    if with_level2 and _has_level2_rubric(scenario):
-        _run_level2(eval_result, spans, scenario, settings)
-        time.sleep(rate_limit_delay)
-
-    provider.shutdown()
+    if quota_error is not None:
+        raise quota_error
+    if final_result is None:
+        final_result = _error_result(scenario, "Eval run did not produce a result.")
     time.sleep(rate_limit_delay)
-    return eval_result
+    return final_result
 
 
-def _invoke_agent_with_retries(settings, preset, scenario, provider, instrumentor):
+def _invoke_agent_with_retries(settings, preset, scenario):
     last_error = None
     for attempt in range(MAX_RETRIES + 1):
         try:
@@ -351,7 +612,6 @@ def _invoke_agent_with_retries(settings, preset, scenario, provider, instrumento
             kind = classify_error(e)
 
             if kind.should_stop_run:
-                _teardown(provider, instrumentor)
                 raise QuotaExhaustedError(
                     retry_after=_extract_retry_delay(e),
                     message=f"Gemini quota exhausted. Retry after {_extract_retry_delay(e)}s",
@@ -363,10 +623,8 @@ def _invoke_agent_with_retries(settings, preset, scenario, provider, instrumento
                 time.sleep(wait)
                 continue
 
-            _teardown(provider, instrumentor)
             return _error_result(scenario, f"Agent failed [{kind.value}]: {e}")
 
-    _teardown(provider, instrumentor)
     return _error_result(
         scenario,
         f"Agent failed after {MAX_RETRIES + 1} attempts: {last_error}",
@@ -405,9 +663,58 @@ def _record_metrics_best_effort(
         m = AgentMetrics()
         m.record_agent_run(
             success=result.passed,
-            scenario_id=scenario.id,
             benchmark=scenario.benchmark,
+            category=scenario.category,
+            evaluation_mode=scenario.evaluation_mode,
         )
+        m.record_eval_outcome(
+            result.status.value,
+            benchmark=scenario.benchmark,
+            category=scenario.category,
+            evaluation_mode=scenario.evaluation_mode,
+        )
+        m.record_risk_signal_count(
+            len(result.risk_signals),
+            benchmark=scenario.benchmark,
+            category=scenario.category,
+            evaluation_mode=scenario.evaluation_mode,
+        )
+
+        for signal in result.risk_signals:
+            m.record_risk_signal(
+                _risk_signal_type(signal),
+                benchmark=scenario.benchmark,
+                category=scenario.category,
+                evaluation_mode=scenario.evaluation_mode,
+            )
+
+        if result.level1.trajectory_analysis is not None:
+            for pattern in result.level1.trajectory_analysis.failure_map.patterns:
+                m.record_failure_pattern(
+                    pattern.pattern_type,
+                    severity=pattern.severity,
+                    benchmark=scenario.benchmark,
+                    category=scenario.category,
+                    evaluation_mode=scenario.evaluation_mode,
+                )
+
+        for dimension, score in result.level2_scores.items():
+            if score >= 0:
+                m.record_judge_score(
+                    float(score),
+                    dimension=dimension,
+                    benchmark=scenario.benchmark,
+                    category=scenario.category,
+                    evaluation_mode=scenario.evaluation_mode,
+                )
+        if result.judge_overall_score is not None:
+            m.record_judge_score(
+                result.judge_overall_score,
+                dimension="overall",
+                benchmark=scenario.benchmark,
+                category=scenario.category,
+                evaluation_mode=scenario.evaluation_mode,
+            )
 
         for span in spans:
             attrs = dict(span.attributes or {})

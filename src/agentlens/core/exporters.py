@@ -43,11 +43,7 @@ def _timestamp(created_at: datetime | None) -> datetime:
 
 
 def _trace_status(result: EvalResult) -> TraceStatus:
-    if result.error:
-        return TraceStatus.ERROR
-    if result.passed:
-        return TraceStatus.PASSED
-    return TraceStatus.FAILED
+    return result.status
 
 
 def build_trace_records(
@@ -185,21 +181,27 @@ def build_eval_run_record(
                 category=scenario.category,
                 evaluation_mode=scenario.evaluation_mode,
                 passed=result.passed,
+                status=result.status,
                 level1_passed=result.level1.passed,
                 judge_overall_score=result.judge_overall_score,
+                risk_signals=list(result.risk_signals),
                 error=result.error,
                 metadata=dict(scenario.metadata),
             )
         )
 
-    passed = sum(1 for result in results if result.passed)
+    passed = sum(1 for result in results if result.status == TraceStatus.PASSED)
+    partial_success = sum(1 for result in results if result.status == TraceStatus.PARTIAL_SUCCESS)
+    risky_success = sum(1 for result in results if result.status == TraceStatus.RISKY_SUCCESS)
     total = len(results)
-    failed = total - passed
+    failed = total - passed - partial_success - risky_success
     benchmarks = sorted({result.scenario.benchmark for result in results if result.scenario.benchmark})
 
     summary = EvalRunSummary(
         total=total,
         passed=passed,
+        partial_success=partial_success,
+        risky_success=risky_success,
         failed=failed,
         pass_rate=round((passed / total) * 100, 1) if total else 0.0,
         benchmarks=benchmarks,

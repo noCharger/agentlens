@@ -10,6 +10,7 @@ from agentlens.eval.scenarios import ExpectedResult, Scenario
 from agentlens.eval.runner import (
     EvalResult,
     Level1Result,
+    _annotate_eval_span,
     _has_level2_rubric,
     _run_level2,
     evaluate_scenario,
@@ -18,7 +19,12 @@ from agentlens.eval.runner import (
 )
 from agentlens.eval.level1_deterministic.output_format import OutputFormatResult
 from agentlens.eval.level1_deterministic.tool_usage import ToolUsageResult
-from agentlens.eval.level1_deterministic.trajectory import TrajectoryResult
+from agentlens.eval.level1_deterministic.trajectory import (
+    FailureMapResult,
+    StructuralAnalysis,
+    TrajectoryAnalysis,
+    TrajectoryResult,
+)
 
 
 def _make_scenario(**overrides) -> Scenario:
@@ -206,3 +212,39 @@ def test_run_level2_sets_error_when_judge_returns_no_scores(monkeypatch):
 
     assert eval_result.level2_scores == {"error": -1}
     assert "returned no scores" in (eval_result.error or "")
+
+
+def test_annotate_eval_span_emits_semantic_attributes_and_events():
+    scenario = _make_scenario(evaluation_mode="llm_judge", judge_threshold=4.0)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+
+    result = EvalResult(
+        scenario=scenario,
+        level1=Level1Result(
+            tool_usage=ToolUsageResult(True, ["read_file"], ["read_file"], [], []),
+            output_format=OutputFormatResult(True, "ok", ["hello"], []),
+            trajectory=TrajectoryResult(True, 2, 5, False, 10, 5, None, []),
+            trajectory_analysis=TrajectoryAnalysis(
+                basic=TrajectoryResult(True, 2, 5, False, 10, 5, None, []),
+                structural=StructuralAnalysis([], 0, 0, 0.0, 0, 0.0),
+                failure_map=FailureMapResult(patterns=[], dominant_pattern=None, risk_score=0.0),
+            ),
+        ),
+        level2_scores={"accuracy": 4.5},
+        risk_signals=["unexpected_privileged_tool:shell"],
+    )
+
+    with tracer.start_as_current_span("agent.run") as span:
+        _annotate_eval_span(span, scenario, result)
+
+    spans = exporter.get_finished_spans()
+    span = spans[0]
+    assert span.attributes["eval.status"] == "risky_success"
+    assert span.attributes["eval.level1.tool_usage_passed"] is True
+    assert span.attributes["eval.risk_signal_count"] == 1
+    event_names = [event.name for event in span.events]
+    assert "eval.risk_signal" in event_names
+    assert "eval.judge_score" in event_names

@@ -35,11 +35,20 @@ def get_tracer() -> Tracer:
 def agent_run_span(
     scenario_id: str | None = None,
     query: str = "",
+    benchmark: str = "",
+    category: str = "",
+    evaluation_mode: str = "",
 ) -> Generator[trace.Span, None, None]:
     tracer = get_tracer()
     with tracer.start_as_current_span("agent.run") as span:
         if scenario_id:
             span.set_attribute("agent.scenario_id", scenario_id)
+        if benchmark:
+            span.set_attribute("agent.benchmark", benchmark)
+        if category:
+            span.set_attribute("agent.category", category)
+        if evaluation_mode:
+            span.set_attribute("eval.evaluation_mode", evaluation_mode)
         span.set_attribute("agent.input_query", query)
         span.set_attribute("agent.total_steps", 0)
         span.set_attribute("agent.success", False)
