@@ -1,6 +1,6 @@
 """Tests for G-Eval CoT meta-evaluation framework."""
 
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage
 from opentelemetry.sdk.trace import TracerProvider
@@ -9,13 +9,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from agentlens.eval.level2_llm_judge.geval import (
     _parse_steps,
-    _step_cache,
     clear_step_cache,
     generate_evaluation_steps,
     geval_judge_scenario,
     geval_score,
 )
-from agentlens.eval.level2_llm_judge.rubrics import RUBRIC_DEFINITIONS
 
 
 def _make_spans(*span_configs):

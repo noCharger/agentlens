@@ -10,7 +10,6 @@ Extensible via the Notifier protocol.
 
 from __future__ import annotations
 
-import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field

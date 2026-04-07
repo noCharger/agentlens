@@ -147,7 +147,7 @@ def _print_results(results: list[EvalResult]) -> None:
             if r.error:
                 console.print(f"  [red]Error:[/red] {r.error}")
             if r.level1.failure_reasons:
-                console.print(f"  [bold]L1 Reasons:[/bold]")
+                console.print("  [bold]L1 Reasons:[/bold]")
                 for reason in r.level1.failure_reasons:
                     console.print(f"    - {reason}")
             if r.level1.supplemental_checks:

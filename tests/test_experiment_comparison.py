@@ -6,7 +6,6 @@ from agentlens.eval.level1_deterministic.tool_usage import ToolUsageResult
 from agentlens.eval.level1_deterministic.output_format import OutputFormatResult
 from agentlens.eval.level1_deterministic.trajectory import TrajectoryResult
 from agentlens.eval.experiment import (
-    ExperimentComparison,
     VersionedConfig,
     compare_experiments,
 )

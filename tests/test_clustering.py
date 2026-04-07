@@ -70,7 +70,6 @@ class TestClustering:
             _make_result(s2, error="some error"),
         ]
         clustering = cluster_failures(results)
-        status_keys = {c.cluster_key for c in clustering.clusters_by_status}
         # partial_success (output ok, tools wrong) and error
         assert len(clustering.clusters_by_status) >= 1
 

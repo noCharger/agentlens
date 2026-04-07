@@ -1,7 +1,5 @@
 """Tests for feature flag system (config, CLI, runner wiring)."""
 
-from unittest.mock import MagicMock, patch
-
 from agentlens.config import AgentLensSettings, get_settings
 
 
@@ -87,7 +85,6 @@ def test_execute_and_eval_signature_accepts_flags():
 def test_cli_parser_accepts_flags():
     """Verify CLI parser accepts all feature flag arguments."""
     import argparse
-    from io import StringIO
 
     # Import just the parser construction part.
     parser = argparse.ArgumentParser()

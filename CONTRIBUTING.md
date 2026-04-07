@@ -5,7 +5,7 @@ Thanks for your interest in contributing. This document covers how to get set up
 ## Getting started
 
 ```bash
-git clone https://github.com/wjmoss/agentlens.git
+git clone https://github.com/noCharger/agentlens.git
 cd agentlens
 python3.11 -m venv .venv
 source .venv/bin/activate
@@ -21,7 +21,7 @@ python -m ruff check src tests  # no lint errors
 
 ## What to work on
 
-Check the [open issues](https://github.com/wjmoss/agentlens/issues) for things labeled `good first issue` or `help wanted`. If you have an idea that isn't tracked yet, open a feature request first so we can discuss scope before you invest time in an implementation.
+Check the [open issues](https://github.com/noCharger/agentlens/issues) for things labeled `good first issue` or `help wanted`. If you have an idea that isn't tracked yet, open a feature request first so we can discuss scope before you invest time in an implementation.
 
 Good areas for contribution:
 
@@ -86,4 +86,4 @@ test(geval): add cache hit coverage
 
 ## Questions
 
-Open a [Discussion](https://github.com/wjmoss/agentlens/discussions) for design questions or anything you're unsure about before writing code. Issues are for bugs and concrete feature requests.
+Open an [issue](https://github.com/noCharger/agentlens/issues) if you're unsure where a change belongs or want to discuss scope before writing code. Use bug reports for defects and feature requests for new ideas.

@@ -171,7 +171,6 @@ def evaluate_answer_relevancy(
     total = len(results)
     ratio = relevant_count / total if total > 0 else 0.0
 
-    relevant_stmts = [s for s, r in results if r]
     irrelevant_stmts = [s for s, r in results if not r]
 
     parts = [f"{relevant_count}/{total} statements relevant."]

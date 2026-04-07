@@ -350,7 +350,7 @@ def _detect_loop_trap(
 
     if structure.subtask_switches > 0:
         evidence = [
-            f"loop_detected=True",
+            "loop_detected=True",
             f"subtask_switches={structure.subtask_switches}",
             f"steps={basic.total_steps}",
         ]
