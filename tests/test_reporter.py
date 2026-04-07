@@ -7,6 +7,9 @@ from agentlens.eval.scenarios import Scenario, ExpectedResult
 from agentlens.eval.runner import EvalResult, Level1Result
 from agentlens.eval.level1_deterministic.tool_usage import ToolUsageResult
 from agentlens.eval.level1_deterministic.output_format import OutputFormatResult
+from agentlens.eval.level1_deterministic.tool_params import ToolParamsResult, ToolParamViolation
+from agentlens.eval.level1_deterministic.termination import TerminationResult
+from agentlens.eval.level1_deterministic.safety import SafetyResult, SafetyViolation
 from agentlens.eval.level1_deterministic.trajectory import TrajectoryResult
 from agentlens.eval.level3_human.reporter import generate_report
 
@@ -86,11 +89,61 @@ def test_generate_report_writes_file():
         assert "AgentLens" in content
 
 
+def test_generate_report_creates_parent_directory():
+    results = [_make_eval_result(True)]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "reports" / "nested" / "report.html"
+        generate_report(results, output_path=path)
+        assert path.exists()
+
+
 def test_generate_report_with_l2_scores():
     result = _make_eval_result(True)
     result.level2_scores = {"accuracy": 4.5}
     html = generate_report([result])
     assert "4.5" in html
+
+
+def test_generate_report_includes_judge_explanations_and_hidden_l1_reasons():
+    result = _make_eval_result(True)
+    result.level1.tool_params = ToolParamsResult(
+        passed=False,
+        violations=[
+            ToolParamViolation(
+                tool_name="read_file",
+                param_name="path",
+                reason="value_mismatch",
+                expected="config.yaml",
+                actual="other.txt",
+            )
+        ],
+        checked_count=1,
+    )
+    result.level1.termination = TerminationResult(
+        passed=False,
+        termination_type="premature",
+        reasons=["Agent used only 0 tools, expected at least 1"],
+        has_escalation=False,
+    )
+    result.level1.safety = SafetyResult(
+        passed=False,
+        violations=[
+            SafetyViolation(
+                violation_type="leakage",
+                description="Potential api_key leakage detected",
+                severity="high",
+            )
+        ],
+        checked_spans=1,
+    )
+    result.level2_scores = {"accuracy": 4.5}
+    result.level2_explanations = {"accuracy": "Grounded and complete"}
+
+    html = generate_report([result])
+
+    assert "Grounded and complete" in html
+    assert "Tool params read_file.path: value_mismatch" in html
+    assert "Potential api_key leakage detected" in html
 
 
 def test_generate_report_with_error():

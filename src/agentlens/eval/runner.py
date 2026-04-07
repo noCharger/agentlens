@@ -49,6 +49,13 @@ _PRESET_MAP: dict[frozenset[str], str] = {
 }
 
 MAX_RETRIES = 2
+_FEATURE_FLAG_NAMES = (
+    "geval",
+    "task_completion",
+    "answer_relevancy",
+    "hallucination",
+    "faithfulness",
+)
 
 
 class ErrorKind(str, Enum):
@@ -96,6 +103,18 @@ def _extract_retry_delay(error: Exception) -> float:
     return 60.0
 
 
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in items:
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
 @dataclass
 class Level1Result:
     tool_usage: ToolUsageResult
@@ -119,12 +138,70 @@ class Level1Result:
             return False
         return True
 
+    @property
+    def supplemental_checks(self) -> dict[str, bool]:
+        checks: dict[str, bool] = {}
+        if self.tool_params is not None:
+            checks["params"] = self.tool_params.passed
+        if self.termination is not None:
+            checks["termination"] = self.termination.passed
+        if self.safety is not None:
+            checks["safety"] = self.safety.passed
+        return checks
+
+    @property
+    def failure_reasons(self) -> list[str]:
+        reasons: list[str] = []
+
+        if not self.tool_usage.passed:
+            if self.tool_usage.missing_tools:
+                reasons.append(f"Missing tools: {', '.join(self.tool_usage.missing_tools)}")
+            if self.tool_usage.unexpected_tools:
+                reasons.append(f"Unexpected tools: {', '.join(self.tool_usage.unexpected_tools)}")
+            if not self.tool_usage.missing_tools and not self.tool_usage.unexpected_tools:
+                reasons.append("Tool usage check failed.")
+
+        if not self.output_format.passed:
+            if self.output_format.missing_substrings:
+                reasons.append(
+                    f"Missing output: {', '.join(self.output_format.missing_substrings)}"
+                )
+            else:
+                reasons.append("Output format check failed.")
+
+        if not self.trajectory.passed:
+            if self.trajectory.reasons:
+                reasons.extend(self.trajectory.reasons)
+            else:
+                reasons.append("Trajectory check failed.")
+
+        if self.tool_params is not None and not self.tool_params.passed:
+            for violation in self.tool_params.violations:
+                reasons.append(
+                    "Tool params "
+                    f"{violation.tool_name}.{violation.param_name}: {violation.reason}"
+                )
+
+        if self.termination is not None and not self.termination.passed:
+            if self.termination.reasons:
+                reasons.extend(self.termination.reasons)
+            else:
+                reasons.append("Termination check failed.")
+
+        if self.safety is not None and not self.safety.passed:
+            for violation in self.safety.violations:
+                reasons.append(f"Safety {violation.violation_type}: {violation.description}")
+
+        return _dedupe_preserve_order(reasons)
+
 
 @dataclass
 class EvalResult:
     scenario: Scenario
     level1: Level1Result
     level2_scores: dict[str, float] = field(default_factory=dict)
+    level2_explanations: dict[str, str] = field(default_factory=dict)
+    feature_flags: dict[str, bool] = field(default_factory=dict)
     error: str | None = None
     risk_signals: list[str] = field(default_factory=list)
 
@@ -201,6 +278,19 @@ class EvalResult:
             if total > 0 and missing < total:
                 return True
         return False
+
+    @property
+    def level2_reason_lines(self) -> list[str]:
+        reasons: list[str] = []
+        for dimension, score in self.level2_scores.items():
+            if score < 0:
+                continue
+            explanation = self.level2_explanations.get(dimension, "").strip()
+            if explanation:
+                reasons.append(f"{dimension} ({score}/5): {explanation}")
+            else:
+                reasons.append(f"{dimension} ({score}/5)")
+        return reasons
 
 
 def run_setup_commands(commands: list[str]) -> None:
@@ -366,6 +456,11 @@ def _annotate_eval_span(span, scenario: Scenario, result: EvalResult) -> None:
         span.set_attribute("eval.judge.overall_score", result.judge_overall_score)
     if scenario.evaluation_mode == "llm_judge":
         span.set_attribute("eval.judge.threshold", scenario.judge_threshold)
+    for flag_name in _FEATURE_FLAG_NAMES:
+        span.set_attribute(
+            f"eval.flags.{flag_name}",
+            bool(result.feature_flags.get(flag_name, False)),
+        )
 
     analysis = result.level1.trajectory_analysis
     if analysis is not None:
@@ -482,6 +577,12 @@ def execute_and_eval(
     preset: str = "full",
     with_level2: bool = False,
     rate_limit_delay: float = 6.0,
+    *,
+    use_geval: bool = False,
+    task_completion: bool = False,
+    answer_relevancy: bool = False,
+    hallucination: bool = False,
+    faithfulness: bool = False,
 ) -> EvalResult:
     if scenario.evaluation_mode == "external":
         return _error_result(
@@ -520,6 +621,13 @@ def execute_and_eval(
 
     final_result: EvalResult | None = None
     quota_error: QuotaExhaustedError | None = None
+    resolved_feature_flags = {
+        "geval": use_geval,
+        "task_completion": task_completion,
+        "answer_relevancy": answer_relevancy,
+        "hallucination": hallucination,
+        "faithfulness": faithfulness,
+    }
 
     try:
         with agent_run_span(
@@ -538,6 +646,7 @@ def execute_and_eval(
                 raise
             except QuotaExhaustedError as exc:
                 final_result = _error_result(scenario, str(exc))
+                final_result.feature_flags = dict(resolved_feature_flags)
                 _annotate_eval_span(run_span, scenario, final_result)
                 _record_metrics_best_effort([], scenario, final_result)
                 finalize_run_span(run_span, total_steps=0, success=False, error=str(exc))
@@ -545,6 +654,7 @@ def execute_and_eval(
             else:
                 if isinstance(invoke_result, EvalResult):
                     final_result = invoke_result
+                    final_result.feature_flags = dict(resolved_feature_flags)
                     _annotate_eval_span(run_span, scenario, final_result)
                     _record_metrics_best_effort([], scenario, final_result)
                     finalize_run_span(
@@ -570,11 +680,23 @@ def execute_and_eval(
                     spans = list(mem_exporter.get_finished_spans())
                     final_result = evaluate_scenario(scenario, spans)
 
-                    if with_level2 and _has_level2_rubric(scenario):
-                        _run_level2(final_result, spans, scenario, settings)
+                    _feature_flags = dict(
+                        use_geval=use_geval,
+                        task_completion=task_completion,
+                        answer_relevancy=answer_relevancy,
+                        hallucination=hallucination,
+                        faithfulness=faithfulness,
+                    )
+                    _has_extensions = any(_feature_flags.values())
+                    if with_level2 and (_has_level2_rubric(scenario) or _has_extensions):
+                        _run_level2(
+                            final_result, spans, scenario, settings,
+                            **_feature_flags,
+                        )
                         provider.force_flush()
                         spans = list(mem_exporter.get_finished_spans())
 
+                    final_result.feature_flags = dict(resolved_feature_flags)
                     _annotate_eval_span(run_span, scenario, final_result)
                     _record_metrics_best_effort(spans, scenario, final_result)
                     finalize_run_span(
@@ -592,6 +714,7 @@ def execute_and_eval(
         raise quota_error
     if final_result is None:
         final_result = _error_result(scenario, "Eval run did not produce a result.")
+    final_result.feature_flags = dict(resolved_feature_flags)
     time.sleep(rate_limit_delay)
     return final_result
 
@@ -631,26 +754,111 @@ def _invoke_agent_with_retries(settings, preset, scenario):
     )
 
 
-def _run_level2(eval_result: EvalResult, spans, scenario, settings) -> None:
+def _run_level2(
+    eval_result: EvalResult, spans, scenario, settings,
+    *,
+    use_geval: bool = False,
+    task_completion: bool = False,
+    answer_relevancy: bool = False,
+    hallucination: bool = False,
+    faithfulness: bool = False,
+) -> None:
     try:
-        from agentlens.eval.level2_llm_judge.judge import judge_scenario, create_judge_llm
+        from agentlens.eval.level2_llm_judge.judge import create_judge_llm
 
-        judge_result = judge_scenario(
-            llm=create_judge_llm(settings),
-            spans=spans,
-            query=scenario.input_query,
-            reference_answer=scenario.reference_answer,
-            rubric_name=scenario.judge_rubric,
-            rubric_text=scenario.judge_rubric_text,
-        )
-        eval_result.level2_scores = {s.dimension: s.score for s in judge_result.scores}
-        if not eval_result.level2_scores:
-            eval_result.level2_scores = {"error": -1}
-            eval_result.error = (
-                "L2 judge returned no scores. Check rubric data and judge model response format."
-            )
+        llm = create_judge_llm(settings)
+        if use_geval:
+            from agentlens.eval.level2_llm_judge.geval import clear_step_cache
+
+            clear_step_cache()
+        eval_result.level2_scores = {}
+        eval_result.level2_explanations = {}
+
+        if _has_level2_rubric(scenario):
+            if use_geval:
+                from agentlens.eval.level2_llm_judge.geval import geval_judge_scenario
+
+                judge_result = geval_judge_scenario(
+                    llm=llm,
+                    spans=spans,
+                    query=scenario.input_query,
+                    reference_answer=scenario.reference_answer,
+                    rubric_name=scenario.judge_rubric,
+                    rubric_text=scenario.judge_rubric_text,
+                )
+            else:
+                from agentlens.eval.level2_llm_judge.judge import judge_scenario
+
+                judge_result = judge_scenario(
+                    llm=llm,
+                    spans=spans,
+                    query=scenario.input_query,
+                    reference_answer=scenario.reference_answer,
+                    rubric_name=scenario.judge_rubric,
+                    rubric_text=scenario.judge_rubric_text,
+                )
+            eval_result.level2_scores = {s.dimension: s.score for s in judge_result.scores}
+            eval_result.level2_explanations = {
+                s.dimension: s.explanation for s in judge_result.scores if s.explanation
+            }
+            if not eval_result.level2_scores:
+                eval_result.level2_scores = {"error": -1}
+                eval_result.error = (
+                    "L2 judge returned no scores. Check rubric data and judge model response format."
+                )
+        else:
+            eval_result.level2_scores = {}
+            eval_result.level2_explanations = {}
+
+        if task_completion:
+            try:
+                from agentlens.eval.level2_llm_judge.task_completion import evaluate_task_completion
+
+                score = evaluate_task_completion(llm, spans, scenario.input_query)
+                eval_result.level2_scores[score.dimension] = score.score
+                if score.explanation:
+                    eval_result.level2_explanations[score.dimension] = score.explanation
+            except Exception as exc:
+                log.warning("Task completion metric failed: %s", exc)
+
+        if answer_relevancy:
+            try:
+                from agentlens.eval.level2_llm_judge.answer_relevancy import evaluate_answer_relevancy
+
+                score = evaluate_answer_relevancy(llm, spans, scenario.input_query)
+                eval_result.level2_scores[score.dimension] = score.score
+                if score.explanation:
+                    eval_result.level2_explanations[score.dimension] = score.explanation
+            except Exception as exc:
+                log.warning("Answer relevancy metric failed: %s", exc)
+
+        if hallucination:
+            try:
+                from agentlens.eval.level2_llm_judge.hallucination import evaluate_hallucination
+
+                context = getattr(scenario, "context", None) or []
+                score = evaluate_hallucination(llm, spans, scenario.input_query, context=context or None)
+                eval_result.level2_scores[score.dimension] = score.score
+                if score.explanation:
+                    eval_result.level2_explanations[score.dimension] = score.explanation
+            except Exception as exc:
+                log.warning("Hallucination metric failed: %s", exc)
+
+        if faithfulness:
+            try:
+                from agentlens.eval.level2_llm_judge.faithfulness import evaluate_faithfulness
+
+                context = getattr(scenario, "context", None) or []
+                score = evaluate_faithfulness(llm, spans, scenario.input_query, context=context or None)
+                eval_result.level2_scores[score.dimension] = score.score
+                if score.explanation:
+                    eval_result.level2_explanations[score.dimension] = score.explanation
+            except Exception as exc:
+                log.warning("Faithfulness metric failed: %s", exc)
+
     except Exception as exc:
         eval_result.level2_scores = {"error": -1}
+        eval_result.level2_explanations = {}
         eval_result.error = f"L2 judge failed: {exc}"
 
 

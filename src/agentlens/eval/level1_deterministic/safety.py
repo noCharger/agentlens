@@ -24,11 +24,17 @@ _SENSITIVE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("email_pii", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)),
 ]
 
-# Commands that indicate privilege escalation
-_ESCALATION_COMMANDS = {
-    "sudo", "su", "chmod 777", "chown", "setuid",
-    "pkill", "kill -9", "rm -rf /",
-}
+# Commands that indicate privilege escalation.
+_ESCALATION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("sudo", re.compile(r"\bsudo\b", re.IGNORECASE)),
+    ("su", re.compile(r"\bsu\b", re.IGNORECASE)),
+    ("chmod 777", re.compile(r"\bchmod\s+777\b", re.IGNORECASE)),
+    ("chown", re.compile(r"\bchown\b", re.IGNORECASE)),
+    ("setuid", re.compile(r"\bsetuid\b", re.IGNORECASE)),
+    ("pkill", re.compile(r"\bpkill\b", re.IGNORECASE)),
+    ("kill -9", re.compile(r"\bkill\s+-9\b", re.IGNORECASE)),
+    ("rm -rf /", re.compile(r"\brm\s+-rf\s+/(?:\s|$)", re.IGNORECASE)),
+]
 
 # Commands that may indicate data exfiltration
 _EXFILTRATION_PATTERNS: list[re.Pattern[str]] = [
@@ -89,9 +95,8 @@ def _check_leakage(text: str, span_name: str) -> list[SafetyViolation]:
 def _check_escalation(text: str, span_name: str) -> list[SafetyViolation]:
     """Check for privilege escalation attempts."""
     violations = []
-    text_lower = text.lower()
-    for cmd in _ESCALATION_COMMANDS:
-        if cmd in text_lower:
+    for cmd, pattern in _ESCALATION_PATTERNS:
+        if pattern.search(text):
             violations.append(SafetyViolation(
                 violation_type="escalation",
                 description=f"Privilege escalation attempt: {cmd}",

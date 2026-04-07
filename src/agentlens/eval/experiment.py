@@ -17,6 +17,14 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agentlens.eval.runner import EvalResult
 
+_FEATURE_FLAG_NAMES = (
+    "geval",
+    "task_completion",
+    "answer_relevancy",
+    "hallucination",
+    "faithfulness",
+)
+
 
 @dataclass
 class VersionedConfig:
@@ -106,6 +114,15 @@ def _collect_dimension_scores(results: list["EvalResult"]) -> dict[str, list[flo
     return scores
 
 
+def _collect_feature_flags(results: list["EvalResult"]) -> dict[str, bool]:
+    flags = {name: False for name in _FEATURE_FLAG_NAMES}
+    for result in results:
+        for name in _FEATURE_FLAG_NAMES:
+            if result.feature_flags.get(name, False):
+                flags[name] = True
+    return flags
+
+
 def compare_experiments(
     baseline_results: list["EvalResult"],
     candidate_results: list["EvalResult"],
@@ -116,6 +133,10 @@ def compare_experiments(
     """Run multi-dimensional comparison between two experiment runs."""
     baseline_config = baseline_config or VersionedConfig()
     candidate_config = candidate_config or VersionedConfig()
+    baseline_config.metadata = dict(baseline_config.metadata)
+    candidate_config.metadata = dict(candidate_config.metadata)
+    baseline_config.metadata.setdefault("feature_flags", _collect_feature_flags(baseline_results))
+    candidate_config.metadata.setdefault("feature_flags", _collect_feature_flags(candidate_results))
 
     base_by_id = {r.scenario.id: r for r in baseline_results}
     cand_by_id = {r.scenario.id: r for r in candidate_results}

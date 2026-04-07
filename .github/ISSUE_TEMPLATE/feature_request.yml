@@ -1,0 +1,55 @@
+name: Feature Request
+description: Suggest an improvement or new capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are welcome. The more concrete, the better.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - L1 deterministic checks
+        - L2 LLM-as-Judge / new metric
+        - L3 HTML report
+        - Observability / OTEL
+        - Benchmark / dataset pipeline
+        - Model provider support
+        - CLI / configuration
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you solving?
+      description: Describe the gap or pain point. What can't you do today?
+      placeholder: When I evaluate multi-step agent runs, I can't easily tell which sub-task failed because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like this to work? Include CLI flags, config keys, or YAML schema changes if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds have you tried?
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to submit a PR for this

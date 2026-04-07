@@ -52,6 +52,7 @@ class Scenario(BaseModel):
     judge_rubric_text: str = ""
     judge_threshold: float = 4.0
     reference_answer: str = ""
+    context: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"populate_by_name": True}
@@ -97,6 +98,7 @@ class Scenario(BaseModel):
             judge_rubric_text=data.get("judge_rubric_text", ""),
             judge_threshold=data.get("judge_threshold", 4.0),
             reference_answer=data.get("reference_answer", ""),
+            context=data.get("context", []),
             metadata=data.get("metadata", {}),
         )
 

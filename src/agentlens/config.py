@@ -61,6 +61,27 @@ class AgentLensSettings(BaseSettings):
     otel_service_name: str = Field(default="agentlens", description="OTEL service name")
     agent_max_steps: int = Field(default=10, description="Default max steps for agent execution")
 
+    judge_use_geval: bool = Field(
+        default=False,
+        description="Use G-Eval CoT meta-evaluation for L2 rubric scoring",
+    )
+    judge_task_completion: bool = Field(
+        default=False,
+        description="Enable trace-based task completion metric",
+    )
+    judge_answer_relevancy: bool = Field(
+        default=False,
+        description="Enable atomic statement-level answer relevancy metric",
+    )
+    judge_hallucination: bool = Field(
+        default=False,
+        description="Enable NLI-based hallucination detection metric",
+    )
+    judge_faithfulness: bool = Field(
+        default=False,
+        description="Enable context-support faithfulness metric",
+    )
+
 
 def get_settings(**overrides) -> AgentLensSettings:
     return AgentLensSettings(**overrides)

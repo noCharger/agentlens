@@ -22,6 +22,14 @@ Use the dashboard as a layered view:
 - Eval semantics: outcome mix, risky runs, failure patterns, judge scores
 - Trace view: per-request detail, including raw spans plus eval-derived events on `agent.run`
 
+When optional L2 metrics are enabled, judge dimensions can include:
+
+- `task_completion`
+- `answer_relevancy`
+- `hallucination`
+- `faithfulness`
+- the primary rubric dimension, scored directly or via `geval`
+
 ## Prometheus Sample Queries
 
 ### Agent Runs
@@ -56,6 +64,10 @@ sum by (pattern_type) (eval_failure_patterns_total)
 # Average judge score by dimension
 sum(rate(eval_judge_score_sum[30m])) by (judge_dimension)
 / sum(rate(eval_judge_score_count[30m])) by (judge_dimension)
+
+# Optional L2 metrics only
+sum(rate(eval_judge_score_sum{judge_dimension=~"task_completion|answer_relevancy|hallucination|faithfulness"}[30m])) by (judge_dimension)
+/ sum(rate(eval_judge_score_count{judge_dimension=~"task_completion|answer_relevancy|hallucination|faithfulness"}[30m])) by (judge_dimension)
 ```
 
 ### LLM Metrics
@@ -171,6 +183,13 @@ In the trace waterfall, use the root `agent.run` span for semantic context:
 
 - Attributes: `eval.status`, `eval.risk_signal_count`, `eval.judge.overall_score`, L1 pass/fail flags
 - Events: `eval.risk_signal`, `eval.failure_pattern`, `eval.judge_score`
+
+With richer eval output, the root span is also where you can correlate:
+
+- which judge dimensions were emitted for a run
+- whether a low overall score came from the main rubric or an optional metric
+- whether a failed run was caused by tool usage, output, trajectory, params, termination, or safety
+- which feature-flag combination was enabled via `eval.flags.*`
 
 Click any trace ID in the Recent Traces table to view the full trace waterfall with both runtime and eval context.
 

@@ -2,541 +2,387 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-AgentLens is a lightweight evaluation and observability toolkit for AI agents.
-It currently covers four main areas:
+[![CI](https://github.com/wjmoss/agentlens/actions/workflows/ci.yml/badge.svg)](https://github.com/wjmoss/agentlens/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-- Agent execution with LangGraph + LangChain
-- Selectable model providers for both agent and judge
-- Multi-level evaluation with deterministic checks, LLM-as-Judge, and HTML reports
-- OpenTelemetry traces and metrics
+Evaluate AI agents the way you'd test any other system: deterministic checks first, semantic scoring when it matters, full traces when you need to debug.
 
-## OSS Scope
+AgentLens is an evaluation and observability toolkit for LLM-based agents. It runs locally, integrates with CI, and produces results you can actually act on.
 
-Included in OSS:
-
-- Local/CI SDK + CLI
-- Runtime benchmark adapters and dataset build pipeline
-- Eval runner (`deterministic` + `llm_judge`) and HTML reports
-- OpenTelemetry instrumentation and basic local monitoring primitives
-- Local core records (`src/agentlens/core/`): file/sqlite persistence, API/CLI inspection, alert-rule evaluation
-
-Out of OSS (enterprise/private):
-
-- Multi-tenant control plane and workspace isolation
-- Enterprise identity stack (SSO, SCIM, fine-grained RBAC/ABAC)
-- Compliance orchestration (SOC2, HIPAA, GDPR, retention/legal hold, compliance reporting)
-- Managed on-prem packaging internals, data-residency policy operations, commercial SLA/billing/support tooling
-
-## Architecture
-
-```mermaid
-flowchart LR
-    A["Static scenarios<br/>src/agentlens/scenarios/*.yaml"] --> C["Dataset builder<br/>agentlens.dataset"]
-    B["Raw benchmarks<br/>data/benchmarks/<slug>/"] --> D["Runtime benchmark importers<br/>agentlens.eval.importers"]
-    D --> C
-    C --> E["Eval runner<br/>agentlens.eval"]
-    E --> F["L1 deterministic checks"]
-    E --> G["L2 llm_judge checks"]
-    E --> H["L3 HTML report"]
-    E --> I["OTEL traces and metrics"]
-    E --> J["Core records<br/>agentlens.core"]
-    I --> J
-    J --> K["Experiment and monitor views"]
-    K --> L["Annotation tasks"]
-    K --> M["Alert rules and events"]
-    M --> C
+```
+Scenario tc-001: Read File Content
+  L1  tools: PASS  output: PASS  trajectory: PASS  safety: PASS
+  L2  accuracy: 5/5 — "Output matches reference content exactly."
+  ──────────────────────────────────────────────────────────────
+  PASS
 ```
 
-Core reliability principles (OSS core):
-
-- Stateless API/service handlers with persistent state in file/sqlite repositories
-- Idempotent snapshot writes (`idempotency_key`) for retry-safe ingestion
-- Bounded pagination (`limit`/`offset`) to control memory and backpressure
-- Durable and concurrent SQLite behavior (`WAL`, `busy_timeout`, retry with backoff)
-- Deterministic audit and alert event IDs to prevent duplicates during retries
-
-Core packages and responsibilities:
-
-- `src/agentlens/agents/`: runtime agent creation and tool presets
-- `src/agentlens/model_selection.py` + `src/agentlens/llms.py`: provider/model resolution and model client construction
-- `src/agentlens/eval/`: runtime scenario loading, benchmark adapters, eval runner, L1/L2/L3 evaluation outputs
-- `src/agentlens/dataset/`: immutable dataset-version build and dataset-item to runtime-scenario conversion
-- `src/agentlens/core/`: local closed-loop records, file/sqlite repositories, local API/CLI, alert evaluation/events
-- `src/agentlens/observability/`: OTEL instrumentation, spans, and metrics
-- `src/agentlens/scenarios/`: handwritten static YAML scenarios
-
-## Repository Layout
-
-```text
-agentlens/
-├── src/agentlens/
-│   ├── agents/
-│   ├── scenarios/               # handwritten YAML scenarios
-│   ├── eval/
-│   │   ├── level1_deterministic/
-│   │   ├── level2_llm_judge/
-│   │   ├── level3_human/
-│   │   ├── benchmarks.py
-│   │   ├── importers.py
-│   │   ├── runner.py
-│   │   └── scenarios.py
-│   ├── dataset/                 # dataset-version pipeline
-│   ├── core/                    # local closed-loop records and APIs
-│   └── observability/           # traces and metrics
-├── data/
-│   └── benchmarks/<slug>/       # raw benchmark files (runtime loaded)
-├── infra/
-├── tests/
-└── pyproject.toml
-```
-
-## Observability Stack
-
-For local monitoring:
+## Quick Start
 
 ```bash
-docker compose up -d
-```
-
-Recent updates:
-
-- LLM metrics are provider-agnostic in Grafana and Prometheus using:
-  `span_name=~"ChatGoogleGenerativeAI|ChatOpenAI|ChatDeepSeek|ChatAnthropic"`
-- `agent.run` now acts as the eval-enriched root span:
-  raw execution spans stay in the trace, while semantic eval signals are emitted back as root-span attributes/events and Prometheus metrics
-- New dashboard panels include:
-  `Eval Outcome Mix`, `Risk Signals by Type`, `Failure Patterns`, `Judge Score by Dimension`,
-  alongside `LLM Calls by Provider`, `LLM Latency by Provider`, `Trace Duration Distribution`, `Slowest Operations`
-- `Recent Traces` now uses full width and includes click-through trace links to Grafana Explore
-- Tempo datasource enables `nodeGraph`, trace search, and traces-to-metrics linking
-- OTEL Collector now extracts `openinference.span.kind`, `eval.status`, `agent.benchmark`, and related dimensions for span-metrics queries
-- Prometheus alert rules live in [`infra/prometheus-alerts.yml`](infra/prometheus-alerts.yml) and are loaded by [`infra/prometheus.yml`](infra/prometheus.yml)
-
-For sample PromQL/TraceQL queries and alert details, see [`infra/README.md`](infra/README.md).
-
-## Environment Setup
-
-Requirements:
-
-- Python `3.11+`
-- A local virtual environment in `.venv` is recommended
-
-### 1. Create a virtual environment
-
-```bash
+# Setup
 python3.11 -m venv .venv
-```
-
-### 2. Activate it
-
-For `zsh` / `bash`:
-
-```bash
 source .venv/bin/activate
-```
-
-To leave the virtual environment:
-
-```bash
-deactivate
-```
-
-### 3. Install dependencies
-
-For normal development:
-
-```bash
 pip install -e ".[dev]"
+
+# Run all scenarios (dry run — no LLM calls)
+python -m agentlens.eval --dry-run
+
+# Run a single scenario
+python -m agentlens.eval --scenario-id tc-001
+
+# Run with LLM-as-Judge scoring
+python -m agentlens.eval --scenario-id tc-001 --level2
+
+# Generate an HTML report
+python -m agentlens.eval --level2 --output report.html
 ```
 
-If you want parquet support or benchmark downloads:
+## How Evaluation Works
+
+Each scenario goes through up to three layers:
+
+| Layer | What it checks | Cost | Stability |
+|-------|---------------|------|-----------|
+| **L1** Deterministic | Tool usage, output content, trajectory, parameters, termination, safety | Zero | High |
+| **L2** LLM-as-Judge | Semantic quality via rubrics and optional metrics | 1+ LLM call | Medium |
+| **L3** HTML Report | Human-readable summary with explanations and drill-down | Zero | — |
+
+L1 catches the failures you can define upfront. L2 catches the ones you can't. L3 makes both inspectable.
+
+### L1: Deterministic Checks
+
+Six independent checks run on every scenario:
+
+- **Tool usage** — Did the agent call the expected tools?
+- **Output format** — Does the output contain required substrings?
+- **Trajectory** — Step count, loop detection, strategy drift, subtask switching
+- **Tool parameters** — Were tool calls made with valid arguments?
+- **Termination** — Did the agent stop correctly?
+- **Safety** — Were safety constraints respected?
+
+Each check produces a pass/fail result with structured failure reasons. No LLM calls needed.
+
+### L2: LLM-as-Judge Scoring
+
+When `--level2` is enabled, a judge model scores the agent's output against a rubric and optional reference answer. The base judge produces a 1–5 score with an explanation.
+
+Five optional metrics extend the base judge:
+
+| Metric | What it measures | Method |
+|--------|-----------------|--------|
+| `--geval` | Rubric alignment | Two-phase CoT: generate evaluation steps, then score against them ([G-Eval](https://arxiv.org/abs/2303.16634)) |
+| `--task-completion` | Sub-task coverage | Decompose query into tasks, verify each against the trajectory |
+| `--answer-relevancy` | Statement-level relevance | Decompose answer into atomic statements, judge each for query relevance ([FActScore](https://aclanthology.org/2023.emnlp-main.741/)) |
+| `--hallucination` | Contradiction with context | NLI-based check against provided or trace-extracted context ([CoNLI](https://arxiv.org/abs/2310.03951)) |
+| `--faithfulness` | Grounding in context | Verify each claim is supported by available evidence ([SAFE](https://arxiv.org/abs/2403.18802)) |
+
+Every metric is independently switchable. Enable any combination:
 
 ```bash
-pip install -e ".[dev,benchmarks]"
+# Baseline rubric only
+python -m agentlens.eval --level2
+
+# G-Eval replaces the base judge with structured two-phase scoring
+python -m agentlens.eval --level2 --geval
+
+# Add specific metrics
+python -m agentlens.eval --level2 --geval --hallucination --faithfulness
+
+# Everything
+python -m agentlens.eval --level2 --all-metrics
 ```
 
-`.[benchmarks]` also includes `openpyxl`, `pandas`, and `numpy`, which GDPval spreadsheet tasks rely on.
+All metrics produce `JudgeScore` objects (dimension, score 1–5, explanation), so they flow through the same reporting, OTEL export, and comparison paths.
 
-## Configuration
+### L3: HTML Report
 
-Settings are loaded via `pydantic-settings` from `.env`.
-A minimal example:
+Pass `--output report.html` to generate a self-contained report:
+
+- Summary cards: total, passed, partial, risky, failed, pass rate
+- Per-scenario detail: L1 results, L2 scores and explanations, failure reasons
+- Benchmark-level aggregation when running benchmark suites
+
+## Writing Scenarios
+
+Scenarios are YAML files in `src/agentlens/scenarios/`:
+
+```yaml
+id: tc-001
+name: "Read File Content"
+category: tool_calling
+input:
+  query: "Read the file /tmp/agentlens_test/data.txt and tell me its contents"
+  setup:
+    - "mkdir -p /tmp/agentlens_test && echo 'hello agentlens' > /tmp/agentlens_test/data.txt"
+expected:
+  tools_called: ["read_file"]
+  max_steps: 3
+  output_contains: ["hello agentlens"]
+judge_rubric: "accuracy"
+reference_answer: "The file contains: hello agentlens"
+```
+
+| Field | Purpose |
+|-------|---------|
+| `input.query` | The prompt sent to the agent |
+| `input.setup` | Shell commands run before the agent starts |
+| `expected.tools_called` | L1: which tools must appear in the trace |
+| `expected.output_contains` | L1: substrings the output must include |
+| `expected.max_steps` | L1: upper bound on trajectory length |
+| `judge_rubric` | L2: scoring dimension (`accuracy`, `task_completion`, `answer_relevancy`, etc.) |
+| `reference_answer` | L2: ground truth for the judge |
+| `context` | L2 (optional): explicit context for hallucination/faithfulness checks |
+
+Scenarios without `judge_rubric` run L1 only. Add `context: [...]` to provide grounding documents for hallucination or faithfulness metrics.
+
+## Feature Flags
+
+Every L2 metric can be toggled from the CLI or from `.env` config:
+
+| CLI flag | Environment variable | Default |
+|----------|---------------------|---------|
+| `--geval` | `JUDGE_USE_GEVAL` | off |
+| `--task-completion` | `JUDGE_TASK_COMPLETION` | off |
+| `--answer-relevancy` | `JUDGE_ANSWER_RELEVANCY` | off |
+| `--hallucination` | `JUDGE_HALLUCINATION` | off |
+| `--faithfulness` | `JUDGE_FAITHFULNESS` | off |
+| `--all-metrics` | — | off |
+
+CLI and config flags use OR logic. If neither is set, the base judge runs alone.
+
+This makes ablation experiments straightforward: run the same scenarios with different metric combinations and compare the HTML reports.
+
+## Model Providers
+
+AgentLens supports multiple LLM providers for both the agent and the judge:
 
 ```bash
-GOOGLE_API_KEY=your_google_ai_studio_key
-DEEPSEEK_API_KEY=your_deepseek_api_key
-OPENROUTER_API_KEY=your_openrouter_api_key
-ZHIPU_API_KEY=your_zhipu_api_key
-DEEPSEEK_API_BASE=https://api.deepseek.com
-OPENROUTER_API_BASE=https://openrouter.ai/api/v1
-ZHIPU_API_BASE=https://open.bigmodel.cn/api/paas/v4
-OPENROUTER_HTTP_REFERER=https://your-app.example
-OPENROUTER_X_TITLE=AgentLens
+# Provider syntax: provider:model-name
 AGENT_MODEL=gemini:gemini-2.5-flash
 JUDGE_MODEL=gemini:gemini-2.5-flash-lite
-AGENT_MAX_TOKENS=2048
-JUDGE_MAX_TOKENS=512
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-OTEL_SERVICE_NAME=agentlens
-AGENT_MAX_STEPS=10
 ```
 
-Notes:
+| Provider | Prefix | Example |
+|----------|--------|---------|
+| Gemini | `gemini:` | `gemini:gemini-2.5-flash` |
+| DeepSeek | `deepseek:` | `deepseek:deepseek-chat` |
+| OpenRouter | `openrouter:` | `openrouter:openai/gpt-4o-mini` |
+| Zhipu (GLM) | `zhipu:` | `zhipu:glm-4-plus` |
 
-- `GOOGLE_API_KEY` is only required when you select a Gemini model.
-- `DEEPSEEK_API_KEY` is only required when you select a DeepSeek model.
-- `OPENROUTER_API_KEY` is only required when you select an OpenRouter model.
-- `ZHIPU_API_KEY` is only required when you select a Zhipu model.
-- `JUDGE_MODEL` is only used when `--level2` is enabled.
-- `AGENT_MAX_TOKENS` limits agent output tokens (important for low-credit OpenRouter keys).
-- `JUDGE_MAX_TOKENS` limits L2 judge output tokens (useful for low-credit OpenRouter keys).
-- `OPENROUTER_HTTP_REFERER` and `OPENROUTER_X_TITLE` are optional, but recommended for OpenRouter requests.
-- OTEL is optional. If no collector is available, the runner will degrade as gracefully as possible.
-
-## Model Selection
-
-`AGENT_MODEL` and `JUDGE_MODEL` both support:
-
-- Explicit provider syntax: `gemini:gemini-2.5-flash`
-- Bare model names (for example `deepseek-chat` or `glm-4-plus`)
-- Namespaced model names (for example `openai/gpt-4o-mini`) are inferred as OpenRouter
-
-Explicit provider syntax is recommended because it is clearer and avoids ambiguity.
-
-Common examples:
-
-```bash
-AGENT_MODEL=gemini:gemini-2.5-flash
-JUDGE_MODEL=gemini:gemini-2.5-flash-lite
-```
+Mix providers freely — run a DeepSeek agent with a Gemini judge, or vice versa:
 
 ```bash
 AGENT_MODEL=deepseek:deepseek-chat
-JUDGE_MODEL=deepseek:deepseek-chat
+JUDGE_MODEL=gemini:gemini-2.5-flash-lite
 ```
 
-```bash
-AGENT_MODEL=openrouter:openai/gpt-4o-mini
-JUDGE_MODEL=openrouter:openai/gpt-4o-mini
-```
+Override per run via CLI:
 
 ```bash
-AGENT_MODEL=zhipu:glm-4-plus
-JUDGE_MODEL=zhipu:glm-4-plus
-```
-
-Mixed setup:
-
-```bash
-AGENT_MODEL=deepseek:deepseek-chat
-JUDGE_MODEL=openrouter:openai/gpt-4o-mini
-```
-
-Temporary CLI override:
-
-```bash
-./.venv/bin/python -m agentlens.eval \
+python -m agentlens.eval --scenario-id tc-001 \
   --agent-model openrouter:openai/gpt-4o-mini \
-  --judge-model openrouter:openai/gpt-4o-mini \
-  --scenario-id tc-001
+  --judge-model gemini:gemini-2.5-flash-lite
 ```
 
-Notes:
+Each provider validates credentials and quota before running scenarios. Failures surface early with clear messages.
 
-- `deepseek:deepseek-chat` is a good default for general tool-using agent runs.
-- The judge can use Gemini, DeepSeek, OpenRouter, or Zhipu.
-- When a DeepSeek model is selected, AgentLens performs a balance preflight check before running scenarios. If the account has insufficient balance, the command fails early with a clear error.
-- When an OpenRouter model is selected, AgentLens performs a key preflight check before running scenarios and fails early on auth/credit issues.
-- When a Zhipu model is selected, AgentLens validates key/base-url configuration before running scenarios.
+## Benchmarks
 
-## Local Development Commands
-
-Run tests:
-
-```bash
-./.venv/bin/python -m pytest
-```
-
-Run lint:
-
-```bash
-./.venv/bin/python -m ruff check src tests
-```
-
-Show CLI help:
-
-```bash
-./.venv/bin/python -m agentlens.eval --help
-./.venv/bin/python -m agentlens.eval.importers --help
-./.venv/bin/python -m agentlens.dataset --help
-./.venv/bin/python -m agentlens.core --help
-./.venv/bin/python -m agentlens.core.api --help
-```
-
-## Running Built-In YAML Scenarios
-
-List loaded benchmarks and scenario counts:
-
-```bash
-./.venv/bin/python -m agentlens.eval --list-benchmarks
-```
-
-Dry run without calling the model:
-
-```bash
-./.venv/bin/python -m agentlens.eval --dry-run
-```
-
-Run a single scenario:
-
-```bash
-./.venv/bin/python -m agentlens.eval --scenario-id tc-001
-```
-
-Run a single scenario with DeepSeek:
-
-```bash
-./.venv/bin/python -m agentlens.eval \
-  --scenario-id tc-001 \
-  --agent-model deepseek:deepseek-chat
-```
-
-Generate an HTML report:
-
-```bash
-./.venv/bin/python -m agentlens.eval --output report.html
-```
-
-## Running Benchmarks
-
-### Key Principle
-
-- Put raw benchmark files under `data/benchmarks/<slug>/`
-- AgentLens discovers and loads them dynamically at runtime
-- Generated benchmark YAML files are no longer part of the workflow
-- Eval now supports a dataset-version execution path for reproducible runs
-
-### Two-Pipeline Workflow
-
-Build a dataset version from local scenarios and benchmark data:
-
-```bash
-./.venv/bin/python -m agentlens.dataset \
-  --benchmark gdpval-aa \
-  --name gdpval-regression \
-  --output data/datasets/gdpval-regression-v1.json
-```
-
-Run eval directly from a dataset version file:
-
-```bash
-./.venv/bin/python -m agentlens.eval \
-  --dataset-version-file data/datasets/gdpval-regression-v1.json \
-  --level2 \
-  --output gdpval.html
-```
-
-Run eval from a stored dataset version id:
-
-```bash
-./.venv/bin/python -m agentlens.eval \
-  --dataset-version-id <dataset_version_id> \
-  --platform-store .agentlens-platform \
-  --platform-project-slug qa-project
-```
-
-Compatibility mode remains available: `--benchmark` on `agentlens.eval` still works, and the runner builds an in-memory dataset version before execution.
-When `--platform-store` or `--platform-sqlite` is set, this compatibility path uses a deterministic dataset fingerprint and reuses the same dataset version id instead of generating duplicates.
-(`--platform-*` flags are currently kept for backward compatibility even though the OSS module namespace is now `agentlens.core`.)
+AgentLens loads benchmark data at runtime from `data/benchmarks/<slug>/`.
 
 ### Supported Benchmarks
 
-| Benchmark | slug | Expected input | Default evaluation mode | Can the built-in runner score it directly? |
-| --- | --- | --- | --- | --- |
-| SWE Bench Pro | `swe-bench-pro` | `data/*.parquet` | `external` | No, requires an external harness |
-| Multi-SWE Bench | `multi-swe-bench` | `**/*.jsonl` | `external` | No, requires an external harness |
-| GDPval-AA | `gdpval-aa` | `data/*.parquet` or record files | `llm_judge` | Yes, with `--level2` |
-| Toolathlon | `toolathlon` | task directories | `external` | No, requires an external harness |
-| VIBE-Pro | `vibe-pro` | manifest | `external` | Usually needs an external harness |
-| MLE-Bench lite | `mle-bench-lite` | manifest | `external` | Usually needs an external harness |
-| MM-ClawBench | `mm-clawbench` | manifest | `external` | Usually needs an external harness |
-| Artificial Analysis | `artificial-analysis` | manifest | `external` | Depends on the manifest |
+| Benchmark | Slug | Scoring |
+|-----------|------|---------|
+| GDPval-AA | `gdpval-aa` | Built-in (`--level2`) |
+| SWE-Bench Pro | `swe-bench-pro` | External harness |
+| Multi-SWE Bench | `multi-swe-bench` | External harness |
+| Toolathlon | `toolathlon` | External harness |
+| VIBE-Pro | `vibe-pro` | External harness |
+| MLE-Bench Lite | `mle-bench-lite` | External harness |
+| MM-ClawBench | `mm-clawbench` | External harness |
+| Artificial Analysis | `artificial-analysis` | External harness |
 
-Evaluation mode summary:
+### Dataset Pipeline
 
-- `deterministic`
-  Uses tool usage, output content, and trajectory checks.
-- `llm_judge`
-  Requires `--level2` and uses a rubric plus a reference answer.
-- `external`
-  AgentLens can load, filter, inventory, and report these tasks, but does not score them as passing with the built-in runner.
+Build versioned, reproducible datasets from scenarios and benchmarks:
 
-### Benchmark Sandbox (Default)
+```bash
+# Build a dataset version
+python -m agentlens.dataset \
+  --benchmark gdpval-aa \
+  --name gdpval-regression \
+  --output data/datasets/gdpval-regression-v1.json
 
-Benchmark scenarios run inside a default sandbox policy (first-class, not opt-in):
+# Run eval from a dataset version
+python -m agentlens.eval \
+  --dataset-version-file data/datasets/gdpval-regression-v1.json \
+  --level2 --output gdpval.html
+```
 
-- `prepare` phase (harness-controlled): validates required Python modules and benchmark reference files.
-- `run` phase (agent-controlled): shell commands are checked against benchmark capability profiles.
+### Benchmark Sandbox
 
-During agent execution, non-task commands such as `pip`, `curl`, and GUI `open` are blocked unless a benchmark profile explicitly allows them.
+Benchmark scenarios run in a sandbox by default. Non-task commands (`pip`, `curl`, `open`) are blocked unless a benchmark profile explicitly allows them.
 
-You can override capabilities per benchmark with:
-
-`data/benchmarks/<benchmark-slug>/sandbox_profile.json`
-
-Example:
+Override per benchmark with `data/benchmarks/<slug>/sandbox_profile.json`:
 
 ```json
 {
   "allowed_commands": ["python", "python3", "pip", "ls", "cp", "mv"],
   "blocked_commands": ["curl", "wget", "open"],
-  "required_python_modules": ["openpyxl", "pandas"],
-  "extra_allowed_roots": ["workdir"]
+  "required_python_modules": ["openpyxl", "pandas"]
 }
 ```
 
-### Benchmark Data Layout
-
-Example layout:
-
-```text
-data/benchmarks/
-├── gdpval-aa/
-│   └── data/
-│       └── train-00000-of-00001.parquet
-├── multi-swe-bench/
-│   ├── python/
-│   │   └── multi_swe_bench_python.jsonl
-│   └── rust/
-│       └── tokio-rs__tokio_dataset.jsonl
-└── swe-bench-pro/
-    └── data/
-        └── test-00000-of-00001.parquet
-```
-
-### Preview How Benchmark Data Maps to Runtime Scenarios
-
-List available adapters:
+### Downloading Benchmark Data
 
 ```bash
-./.venv/bin/python -m agentlens.eval.importers --list-benchmarks
-```
-
-Preview a record-style benchmark file:
-
-```bash
-./.venv/bin/python -m agentlens.eval.importers \
-  --benchmark gdpval-aa \
-  --input data/benchmarks/gdpval-aa/data/train-00000-of-00001.parquet \
-  --limit 3
-```
-
-Preview a directory-style benchmark:
-
-```bash
-./.venv/bin/python -m agentlens.eval.importers \
-  --benchmark multi-swe-bench \
-  --input data/benchmarks/multi-swe-bench \
-  --limit 3
-```
-
-### Run a Benchmark
-
-1. Confirm that AgentLens can discover the benchmark:
-
-```bash
-./.venv/bin/python -m agentlens.eval --list-benchmarks
-```
-
-2. Dry run the benchmark selection:
-
-```bash
-./.venv/bin/python -m agentlens.eval --benchmark gdpval-aa --dry-run
-```
-
-3. Run a benchmark that the built-in runner can score:
-
-```bash
-./.venv/bin/python -m agentlens.eval --benchmark gdpval-aa --level2 --output gdpval.html
-```
-
-4. For `external` benchmarks, use dry-run and inventory mode first:
-
-```bash
-./.venv/bin/python -m agentlens.eval --benchmark swe-bench-pro --dry-run
-./.venv/bin/python -m agentlens.eval --benchmark multi-swe-bench --dry-run
-```
-
-If your benchmark root is elsewhere:
-
-```bash
-./.venv/bin/python -m agentlens.eval \
-  --benchmark gdpval-aa \
-  --benchmark-data-root /absolute/path/to/benchmarks \
-  --dry-run
-```
-
-## Downloading Benchmark Data with the Hugging Face CLI
-
-If the benchmark extra dependencies are installed and `hf` is available, you can download files directly into the layout expected by AgentLens.
-
-GDPval-AA example:
-
-```bash
-./.venv/bin/hf download openai/gdpval \
-  --repo-type dataset \
-  --include "data/*.parquet" \
+# GDPval-AA
+pip install -e ".[benchmarks]"
+hf download openai/gdpval \
+  --repo-type dataset --include "data/*.parquet" \
   --local-dir data/benchmarks/gdpval-aa
-```
 
-Multi-SWE Bench example:
-
-```bash
-./.venv/bin/hf download bytedance-research/Multi-SWE-Bench \
-  --repo-type dataset \
-  --include "*.jsonl" \
+# Multi-SWE Bench
+hf download bytedance-research/Multi-SWE-Bench \
+  --repo-type dataset --include "*.jsonl" \
   --local-dir data/benchmarks/multi-swe-bench
 ```
 
-For other benchmarks, any download method is fine as long as the final layout matches the adapter expectations.
+## Observability
 
-## Reports and Observability
+AgentLens instruments every run with OpenTelemetry. When a collector is available, you get:
 
-The CLI output includes:
+- Agent run, tool call, and LLM latency metrics
+- Judge scores by dimension in Prometheus
+- Full traces in Tempo with eval status on the root span
+- Feature flag attributes (`eval.flags.*`) on each trace
 
-- PASS / FAIL for each scenario
-- Benchmark-level summary
-- Error messages
+### Local Monitoring Stack
 
-If you pass `--output report.html`, the generated report includes:
+```bash
+docker compose up -d
+```
 
-- Overall pass rate
-- Benchmark summary
-- L1 / L2 details for each scenario
+| Service | URL |
+|---------|-----|
+| Grafana | [localhost:3001](http://localhost:3001) (admin / admin) |
+| Prometheus | [localhost:9090](http://localhost:9090) |
+| Tempo | [localhost:3200](http://localhost:3200) |
+| OTEL Collector | gRPC :4317, HTTP :4318 |
 
-If an OTEL collector is available, AgentLens also exports:
+Dashboard panels include eval outcome mix, risk signals, failure patterns, judge scores by dimension, LLM latency by provider, and trace duration distribution.
 
-- Agent run metrics
-- Tool call metrics
-- LLM token and latency metrics
+If no collector is running, the eval runner still works — OTEL degrades gracefully.
 
-## FAQ
+## Configuration Reference
 
-### 1. Why does a benchmark say it requires an external harness?
+Minimal `.env`:
 
-That is expected for benchmarks such as `swe-bench-pro` and `multi-swe-bench`.
-Their real scoring depends on their own evaluation harnesses.
-AgentLens currently handles:
+```bash
+GOOGLE_API_KEY=your-key
+AGENT_MODEL=gemini:gemini-2.5-flash
+JUDGE_MODEL=gemini:gemini-2.5-flash-lite
+```
 
-- Runtime task loading
-- Filtering and inventory
-- Unified reporting
-- Avoiding false PASS results for externally scored tasks
+Full `.env.example` is included in the repo. Notable options:
 
-### 2. Why does GDPval-AA require `--level2`?
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `AGENT_MODEL` | Model for the agent | — |
+| `JUDGE_MODEL` | Model for L2 scoring | — |
+| `AGENT_MAX_TOKENS` | Agent output token limit | `2048` |
+| `JUDGE_MAX_TOKENS` | Judge output token limit | `512` |
+| `AGENT_MAX_STEPS` | Max agent trajectory steps | `10` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector endpoint | `http://localhost:4317` |
+| `OTEL_SERVICE_NAME` | Service name in traces | `agentlens` |
 
-Its main scoring signal comes from rubric text and a reference answer, so it runs in `llm_judge` mode.
+API keys are only required for the providers you select.
 
-### 3. Why do I see `sysctlbyname failed` warnings from `pyarrow` on macOS?
+## Architecture
 
-Those warnings are common in restricted environments and usually do not affect parquet loading.
+```mermaid
+flowchart LR
+    A[YAML scenarios] --> E[Eval runner]
+    B[Benchmark data] --> D[Runtime importers] --> E
+    E --> F[L1: deterministic]
+    E --> G[L2: LLM-as-Judge]
+    E --> H[L3: HTML report]
+    E --> I[OTEL traces + metrics]
+    I --> J[Grafana dashboards]
+```
+
+```text
+src/agentlens/
+├── agents/              # Agent creation, tool presets
+├── eval/
+│   ├── level1_deterministic/   # 6 check modules
+│   ├── level2_llm_judge/       # Judge + 5 optional metrics
+│   ├── level3_human/           # HTML reporter
+│   ├── runner.py               # Orchestration
+│   └── scenarios.py            # YAML loader + data model
+├── core/                # Local records, alerts, API
+├── dataset/             # Versioned dataset pipeline
+├── observability/       # OTEL spans + metrics
+├── scenarios/           # Built-in YAML scenarios
+└── config.py            # pydantic-settings
+```
+
+## CLI Reference
+
+```bash
+# Scenario operations
+python -m agentlens.eval --dry-run                    # Validate without LLM calls
+python -m agentlens.eval --list-benchmarks            # Show available benchmarks
+python -m agentlens.eval --scenario-id tc-001         # Run one scenario
+python -m agentlens.eval --scenarios path/to/dir      # Run from custom directory
+
+# Evaluation levels
+python -m agentlens.eval                              # L1 only
+python -m agentlens.eval --level2                     # L1 + L2
+python -m agentlens.eval --level2 --output report.html  # L1 + L2 + L3
+
+# L2 metric selection
+python -m agentlens.eval --level2 --geval
+python -m agentlens.eval --level2 --task-completion --answer-relevancy
+python -m agentlens.eval --level2 --all-metrics
+
+# Benchmark execution
+python -m agentlens.eval --benchmark gdpval-aa --level2
+python -m agentlens.eval --benchmark gdpval-aa --dry-run
+
+# Dataset pipeline
+python -m agentlens.dataset --benchmark gdpval-aa --name v1 --output dataset.json
+python -m agentlens.eval --dataset-version-file dataset.json --level2
+
+# Importers and tooling
+python -m agentlens.eval.importers --list-benchmarks
+python -m agentlens.core --help
+```
+
+## Development
+
+```bash
+# Run tests (380 tests)
+python -m pytest
+
+# Lint
+python -m ruff check src tests
+```
+
+## Research References
+
+| Metric | Primary paper |
+|--------|--------------|
+| G-Eval | [G-Eval: NLG Evaluation using GPT-4 with Better Human Alignment](https://arxiv.org/abs/2303.16634) |
+| Answer Relevancy | [FActScore: Fine-grained Atomic Evaluation of Factual Precision](https://aclanthology.org/2023.emnlp-main.741/) |
+| Hallucination | [CoNLI: Chain of Natural Language Inference for Reducing Hallucinations](https://arxiv.org/abs/2310.03951) |
+| Faithfulness | [SAFE: Long-form Factuality in Large Language Models](https://arxiv.org/abs/2403.18802) |
+
+Additional references: [SelfCheckGPT](https://arxiv.org/abs/2303.08896), [TRUE](https://aclanthology.org/2022.naacl-main.287/), [VeriScore](https://aclanthology.org/2024.findings-emnlp.552/), [RAGAS](https://arxiv.org/abs/2309.15217)
+
+## License
+
+See [LICENSE](LICENSE).

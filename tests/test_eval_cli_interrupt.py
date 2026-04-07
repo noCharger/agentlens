@@ -44,6 +44,11 @@ def test_eval_cli_ctrl_c_keeps_completed_results_for_report(tmp_path, monkeypatc
     settings = SimpleNamespace(
         agent_model="gemini:gemini-2.5-flash",
         judge_model="gemini:gemini-2.5-flash-lite",
+        judge_use_geval=False,
+        judge_task_completion=False,
+        judge_answer_relevancy=False,
+        judge_hallucination=False,
+        judge_faithfulness=False,
     )
 
     monkeypatch.setattr(

@@ -111,6 +111,10 @@ REPORT_TEMPLATE = Template("""\
     <th>Tool Usage</th>
     <th>Output</th>
     <th>Trajectory</th>
+    <th>Params</th>
+    <th>Termination</th>
+    <th>Safety</th>
+    <th>L2 Score</th>
     <th>Overall</th>
     <th>Details</th>
   </tr>
@@ -125,6 +129,28 @@ REPORT_TEMPLATE = Template("""\
     <td><span class="badge {{ 'badge-pass' if r.level1.tool_usage.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.tool_usage.passed else 'FAIL' }}</span></td>
     <td><span class="badge {{ 'badge-pass' if r.level1.output_format.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.output_format.passed else 'FAIL' }}</span></td>
     <td><span class="badge {{ 'badge-pass' if r.level1.trajectory.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.trajectory.passed else 'FAIL' }}</span></td>
+    <td>
+      {% if r.level1.tool_params is not none %}
+      <span class="badge {{ 'badge-pass' if r.level1.tool_params.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.tool_params.passed else 'FAIL' }}</span>
+      {% else %}
+      —
+      {% endif %}
+    </td>
+    <td>
+      {% if r.level1.termination is not none %}
+      <span class="badge {{ 'badge-pass' if r.level1.termination.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.termination.passed else 'FAIL' }}</span>
+      {% else %}
+      —
+      {% endif %}
+    </td>
+    <td>
+      {% if r.level1.safety is not none %}
+      <span class="badge {{ 'badge-pass' if r.level1.safety.passed else 'badge-fail' }}">{{ 'PASS' if r.level1.safety.passed else 'FAIL' }}</span>
+      {% else %}
+      —
+      {% endif %}
+    </td>
+    <td>{% if r.judge_overall_score is not none %}{{ r.judge_overall_score }}/5{% else %}—{% endif %}</td>
     <td><span class="badge {% if r.status.value == 'passed' %}badge-pass{% elif r.status.value == 'partial_success' %}badge-partial{% elif r.status.value == 'risky_success' %}badge-risky{% else %}badge-fail{% endif %}">{{ r.status.value | upper }}</span></td>
     <td>
       <details>
@@ -148,10 +174,28 @@ REPORT_TEMPLATE = Template("""\
           {% for reason in r.level1.trajectory.reasons %}
           <p class="reason">{{ reason }}</p>
           {% endfor %}
+          {% if r.level1.tool_params is not none %}
+          <p><strong>Tool Params:</strong> {{ 'PASS' if r.level1.tool_params.passed else 'FAIL' }}</p>
+          {% endif %}
+          {% if r.level1.termination is not none %}
+          <p><strong>Termination:</strong> {{ 'PASS' if r.level1.termination.passed else 'FAIL' }}</p>
+          {% endif %}
+          {% if r.level1.safety is not none %}
+          <p><strong>Safety:</strong> {{ 'PASS' if r.level1.safety.passed else 'FAIL' }}</p>
+          {% endif %}
+          {% if r.level1.failure_reasons %}
+          <p><strong>L1 Failure Reasons:</strong></p>
+          {% for reason in r.level1.failure_reasons %}
+          <p class="reason">&nbsp;&nbsp;{{ reason }}</p>
+          {% endfor %}
+          {% endif %}
           {% if r.level2_scores %}
           <p><strong>L2 Scores:</strong></p>
           {% for dim, score in r.level2_scores.items() %}
           <p>&nbsp;&nbsp;{{ dim }}: {{ score }}/5</p>
+          {% if r.level2_explanations.get(dim) %}
+          <p>&nbsp;&nbsp;Explanation: {{ r.level2_explanations.get(dim) }}</p>
+          {% endif %}
           {% endfor %}
           {% endif %}
           {% if r.risk_signals %}
@@ -204,6 +248,7 @@ def generate_report(results: list[EvalResult], output_path: Path | None = None) 
     )
 
     if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(html)
 
     return html

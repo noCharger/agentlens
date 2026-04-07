@@ -45,6 +45,35 @@ def _badge(passed: bool) -> str:
     return "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
 
 
+def _truncate(text: str, limit: int = 72) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
+
+def _format_l1_extra(level1) -> str:
+    checks = level1.supplemental_checks
+    if not checks:
+        return "\u2014"
+    labels = []
+    for name, passed in checks.items():
+        labels.append(f"{name}={'PASS' if passed else 'FAIL'}")
+    return ", ".join(labels)
+
+
+def _reason_preview(result: EvalResult) -> str:
+    if result.error:
+        return result.error
+    if result.level1.failure_reasons:
+        return result.level1.failure_reasons[0]
+    if result.level2_reason_lines:
+        return result.level2_reason_lines[0]
+    if result.risk_signals:
+        return result.risk_signals[0]
+    return ""
+
+
 def _print_results(results: list[EvalResult]) -> None:
     table = Table(title="AgentLens Eval Results")
     table.add_column("ID", style="cyan")
@@ -54,23 +83,25 @@ def _print_results(results: list[EvalResult]) -> None:
     table.add_column("Tools", justify="center")
     table.add_column("Output", justify="center")
     table.add_column("Trajectory", justify="center")
+    table.add_column("L1 Extra")
     table.add_column("L2 Score", justify="center")
     table.add_column("Overall", justify="center")
+    table.add_column("Why")
 
     for r in results:
         l2 = ""
-        if r.level2_scores:
-            scores = [v for v in r.level2_scores.values() if v > 0]
-            if scores:
-                l2 = f"{sum(scores) / len(scores):.1f}/5"
+        if r.judge_overall_score is not None:
+            l2 = f"{r.judge_overall_score:.1f}/5"
 
         table.add_row(
             r.scenario.id, r.scenario.name, r.scenario.benchmark_name or "\u2014", r.scenario.category,
             _badge(r.level1.tool_usage.passed),
             _badge(r.level1.output_format.passed),
             _badge(r.level1.trajectory.passed),
+            _format_l1_extra(r.level1),
             l2 or "\u2014",
             _badge(r.passed),
+            _truncate(_reason_preview(r)) or "\u2014",
         )
 
     console.print(table)
@@ -104,6 +135,34 @@ def _print_results(results: list[EvalResult]) -> None:
         console.print(f"\n[red]{len(errors)} scenario(s) had errors:[/red]")
         for r in errors:
             console.print(f"  [cyan]{r.scenario.id}[/cyan]: {r.error}")
+
+    detailed_results = [
+        r for r in results
+        if r.error or r.level1.failure_reasons or r.level2_reason_lines or r.risk_signals
+    ]
+    if detailed_results:
+        console.print("\n[bold]Scenario Details[/bold]")
+        for r in detailed_results:
+            console.print(f"[cyan]{r.scenario.id}[/cyan]: {r.scenario.name}")
+            if r.error:
+                console.print(f"  [red]Error:[/red] {r.error}")
+            if r.level1.failure_reasons:
+                console.print(f"  [bold]L1 Reasons:[/bold]")
+                for reason in r.level1.failure_reasons:
+                    console.print(f"    - {reason}")
+            if r.level1.supplemental_checks:
+                console.print(
+                    "  [bold]L1 Extra Checks:[/bold] "
+                    + _format_l1_extra(r.level1)
+                )
+            if r.level2_reason_lines:
+                console.print("  [bold]Judge Explanations:[/bold]")
+                for reason in r.level2_reason_lines:
+                    console.print(f"    - {reason}")
+            if r.risk_signals:
+                console.print("  [bold]Risk Signals:[/bold]")
+                for signal in r.risk_signals:
+                    console.print(f"    - {signal}")
 
 
 def _print_benchmark_inventory(scenarios) -> None:
@@ -405,6 +464,12 @@ def main():
     )
     parser.add_argument("--scenario-id", type=str, help="Run a single scenario")
     parser.add_argument("--preset", type=str, default="full")
+    parser.add_argument("--geval", action="store_true", help="Enable G-Eval CoT meta-evaluation for L2 judge")
+    parser.add_argument("--task-completion", action="store_true", help="Enable task completion metric")
+    parser.add_argument("--answer-relevancy", action="store_true", help="Enable answer relevancy metric")
+    parser.add_argument("--hallucination", action="store_true", help="Enable hallucination detection metric")
+    parser.add_argument("--faithfulness", action="store_true", help="Enable context-support faithfulness metric")
+    parser.add_argument("--all-metrics", action="store_true", help="Enable all L2 extension metrics")
     parser.add_argument(
         "--platform-export",
         type=Path,
@@ -546,10 +611,21 @@ def main():
     for i, scenario in enumerate(scenarios, 1):
         console.print(f"[{i}/{len(scenarios)}] [cyan]{scenario.id}[/cyan]: {scenario.name}...", end=" ")
 
+        use_geval = args.geval or args.all_metrics or settings.judge_use_geval
+        use_task_completion = args.task_completion or args.all_metrics or settings.judge_task_completion
+        use_answer_relevancy = args.answer_relevancy or args.all_metrics or settings.judge_answer_relevancy
+        use_hallucination = args.hallucination or args.all_metrics or settings.judge_hallucination
+        use_faithfulness = args.faithfulness or args.all_metrics or settings.judge_faithfulness
+
         try:
             result = execute_and_eval(
                 scenario=scenario, settings=settings,
                 preset=args.preset, with_level2=args.level2,
+                use_geval=use_geval,
+                task_completion=use_task_completion,
+                answer_relevancy=use_answer_relevancy,
+                hallucination=use_hallucination,
+                faithfulness=use_faithfulness,
             )
         except KeyboardInterrupt:
             interrupted_by_user = True
@@ -584,6 +660,12 @@ def main():
                         f"overall={overall_text}, threshold={result.scenario.judge_threshold:.1f}, "
                         f"details=({details})[/dim]"
                     )
+            if result.level1.failure_reasons:
+                for reason in result.level1.failure_reasons[:3]:
+                    console.print(f"  [dim]L1: {reason}[/dim]")
+            if result.level2_reason_lines:
+                for reason in result.level2_reason_lines[:2]:
+                    console.print(f"  [dim]Judge: {reason}[/dim]")
 
     console.print()
     _print_results(results)

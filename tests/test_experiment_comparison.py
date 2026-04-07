@@ -12,7 +12,7 @@ from agentlens.eval.experiment import (
 )
 
 
-def _make_result(id: str, *, passed=True, score=None, steps=2, tokens=100):
+def _make_result(id: str, *, passed=True, score=None, steps=2, tokens=100, feature_flags=None):
     scenario = Scenario(
         id=id,
         name=f"Test {id}",
@@ -31,6 +31,7 @@ def _make_result(id: str, *, passed=True, score=None, steps=2, tokens=100):
             trajectory=TrajectoryResult(True, steps, 10, False, tokens, tokens // 2, None, []),
         ),
         level2_scores=l2,
+        feature_flags=feature_flags or {},
     )
 
 
@@ -98,3 +99,13 @@ class TestExperimentComparison:
 
         result = compare_experiments(baseline, candidate)
         assert "passed" in result.candidate_status_counts
+
+    def test_feature_flags_recorded_in_versioned_config_metadata(self):
+        baseline = [_make_result("s1", feature_flags={"geval": False, "task_completion": False})]
+        candidate = [_make_result("s1", feature_flags={"geval": True, "faithfulness": True})]
+
+        result = compare_experiments(baseline, candidate)
+
+        assert result.baseline_config.metadata["feature_flags"]["geval"] is False
+        assert result.candidate_config.metadata["feature_flags"]["geval"] is True
+        assert result.candidate_config.metadata["feature_flags"]["faithfulness"] is True

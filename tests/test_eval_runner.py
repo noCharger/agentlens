@@ -19,12 +19,16 @@ from agentlens.eval.runner import (
 )
 from agentlens.eval.level1_deterministic.output_format import OutputFormatResult
 from agentlens.eval.level1_deterministic.tool_usage import ToolUsageResult
+from agentlens.eval.level1_deterministic.tool_params import ToolParamsResult, ToolParamViolation
+from agentlens.eval.level1_deterministic.termination import TerminationResult
+from agentlens.eval.level1_deterministic.safety import SafetyResult, SafetyViolation
 from agentlens.eval.level1_deterministic.trajectory import (
     FailureMapResult,
     StructuralAnalysis,
     TrajectoryAnalysis,
     TrajectoryResult,
 )
+from agentlens.eval.level2_llm_judge.rubrics import JudgeResult, JudgeScore
 
 
 def _make_scenario(**overrides) -> Scenario:
@@ -214,6 +218,177 @@ def test_run_level2_sets_error_when_judge_returns_no_scores(monkeypatch):
     assert "returned no scores" in (eval_result.error or "")
 
 
+def test_run_level2_preserves_score_explanations(monkeypatch):
+    scenario = _make_scenario(
+        evaluation_mode="llm_judge",
+        expected=ExpectedResult(tools_called=[], max_steps=5, output_contains=[]),
+        judge_rubric_text="Score quality from 1-5.",
+    )
+    eval_result = EvalResult(
+        scenario=scenario,
+        level1=Level1Result(
+            tool_usage=ToolUsageResult(True, [], [], [], []),
+            output_format=OutputFormatResult(True, "ok", [], []),
+            trajectory=TrajectoryResult(True, 1, 5, False, 0, 0, None, []),
+        ),
+    )
+
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.judge.create_judge_llm",
+        lambda settings: object(),
+    )
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.judge.judge_scenario",
+        lambda **kwargs: JudgeResult(
+            scores=[JudgeScore(dimension="custom", score=4, explanation="Grounded and complete")]
+        ),
+    )
+
+    _run_level2(eval_result, spans=[], scenario=scenario, settings=SimpleNamespace())
+
+    assert eval_result.level2_scores == {"custom": 4}
+    assert eval_result.level2_explanations == {"custom": "Grounded and complete"}
+
+
+def test_run_level2_clears_geval_step_cache(monkeypatch):
+    scenario = _make_scenario(
+        evaluation_mode="llm_judge",
+        expected=ExpectedResult(tools_called=[], max_steps=5, output_contains=[]),
+        judge_rubric="accuracy",
+    )
+    eval_result = EvalResult(
+        scenario=scenario,
+        level1=Level1Result(
+            tool_usage=ToolUsageResult(True, [], [], [], []),
+            output_format=OutputFormatResult(True, "ok", [], []),
+            trajectory=TrajectoryResult(True, 1, 5, False, 0, 0, None, []),
+        ),
+    )
+
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.judge.create_judge_llm",
+        lambda settings: object(),
+    )
+
+    calls = {"cleared": 0}
+
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.geval.clear_step_cache",
+        lambda: calls.__setitem__("cleared", calls["cleared"] + 1),
+    )
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.geval.geval_judge_scenario",
+        lambda **kwargs: JudgeResult(
+            scores=[JudgeScore(dimension="accuracy", score=4, explanation="Guided by fresh steps")]
+        ),
+    )
+
+    _run_level2(
+        eval_result,
+        spans=[],
+        scenario=scenario,
+        settings=SimpleNamespace(),
+        use_geval=True,
+    )
+
+    assert calls["cleared"] == 1
+    assert eval_result.level2_scores == {"accuracy": 4}
+
+
+def test_run_level2_adds_faithfulness_metric(monkeypatch):
+    scenario = _make_scenario(
+        evaluation_mode="llm_judge",
+        expected=ExpectedResult(tools_called=[], max_steps=5, output_contains=[]),
+        judge_rubric="accuracy",
+        context=["hello world"],
+    )
+    eval_result = EvalResult(
+        scenario=scenario,
+        level1=Level1Result(
+            tool_usage=ToolUsageResult(True, [], [], [], []),
+            output_format=OutputFormatResult(True, "ok", [], []),
+            trajectory=TrajectoryResult(True, 1, 5, False, 0, 0, None, []),
+        ),
+    )
+
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.judge.create_judge_llm",
+        lambda settings: object(),
+    )
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.judge.judge_scenario",
+        lambda **kwargs: JudgeResult(
+            scores=[JudgeScore(dimension="accuracy", score=4, explanation="Accurate")]
+        ),
+    )
+    monkeypatch.setattr(
+        "agentlens.eval.level2_llm_judge.faithfulness.evaluate_faithfulness",
+        lambda llm, spans, query, context=None: JudgeScore(
+            dimension="faithfulness",
+            score=5,
+            explanation="Fully supported",
+        ),
+    )
+
+    _run_level2(
+        eval_result,
+        spans=[],
+        scenario=scenario,
+        settings=SimpleNamespace(),
+        faithfulness=True,
+    )
+
+    assert eval_result.level2_scores == {"accuracy": 4, "faithfulness": 5}
+    assert eval_result.level2_explanations["faithfulness"] == "Fully supported"
+
+
+def test_level1_failure_reasons_include_hidden_checks():
+    level1 = Level1Result(
+        tool_usage=ToolUsageResult(True, ["read_file"], ["read_file"], [], []),
+        output_format=OutputFormatResult(True, "ok", ["hello"], []),
+        trajectory=TrajectoryResult(True, 2, 5, False, 0, 0, None, []),
+        tool_params=ToolParamsResult(
+            passed=False,
+            violations=[
+                ToolParamViolation(
+                    tool_name="read_file",
+                    param_name="path",
+                    reason="value_mismatch",
+                    expected="config.yaml",
+                    actual="other.txt",
+                )
+            ],
+            checked_count=1,
+        ),
+        termination=TerminationResult(
+            passed=False,
+            termination_type="premature",
+            reasons=["Agent used only 0 tools, expected at least 1"],
+            has_escalation=False,
+        ),
+        safety=SafetyResult(
+            passed=False,
+            violations=[
+                SafetyViolation(
+                    violation_type="leakage",
+                    description="Potential api_key leakage detected",
+                    severity="high",
+                )
+            ],
+            checked_spans=1,
+        ),
+    )
+
+    assert level1.supplemental_checks == {
+        "params": False,
+        "termination": False,
+        "safety": False,
+    }
+    assert "Tool params read_file.path: value_mismatch" in level1.failure_reasons
+    assert "Agent used only 0 tools, expected at least 1" in level1.failure_reasons
+    assert "Safety leakage: Potential api_key leakage detected" in level1.failure_reasons
+
+
 def test_annotate_eval_span_emits_semantic_attributes_and_events():
     scenario = _make_scenario(evaluation_mode="llm_judge", judge_threshold=4.0)
     exporter = InMemorySpanExporter()
@@ -234,6 +409,7 @@ def test_annotate_eval_span_emits_semantic_attributes_and_events():
             ),
         ),
         level2_scores={"accuracy": 4.5},
+        feature_flags={"geval": True, "task_completion": False, "answer_relevancy": False, "hallucination": True, "faithfulness": False},
         risk_signals=["unexpected_privileged_tool:shell"],
     )
 
@@ -245,6 +421,9 @@ def test_annotate_eval_span_emits_semantic_attributes_and_events():
     assert span.attributes["eval.status"] == "risky_success"
     assert span.attributes["eval.level1.tool_usage_passed"] is True
     assert span.attributes["eval.risk_signal_count"] == 1
+    assert span.attributes["eval.flags.geval"] is True
+    assert span.attributes["eval.flags.hallucination"] is True
+    assert span.attributes["eval.flags.task_completion"] is False
     event_names = [event.name for event in span.events]
     assert "eval.risk_signal" in event_names
     assert "eval.judge_score" in event_names
