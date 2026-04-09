@@ -37,6 +37,9 @@ python -m agentlens.eval --scenario-id tc-001 --level2
 
 # Generate an HTML report
 python -m agentlens.eval --level2 --output report.html
+
+# Switch runtime backend
+python -m agentlens.eval --scenario-id tc-001 --agent-framework ag2
 ```
 
 ## How Evaluation Works
@@ -188,6 +191,25 @@ python -m agentlens.eval --scenario-id tc-001 \
 
 Each provider validates credentials and quota before running scenarios. Failures surface early with clear messages.
 
+## Agent Runtimes
+
+AgentLens supports two execution backends for built-in scenarios:
+
+| Runtime | Selector | Status |
+|---------|----------|--------|
+| LangGraph | `AGENT_FRAMEWORK=langgraph` or `--agent-framework langgraph` | Default |
+| AG2 | `AGENT_FRAMEWORK=ag2` or `--agent-framework ag2` | Single-agent parity |
+
+Example:
+
+```bash
+AGENT_FRAMEWORK=ag2 \
+AGENT_MODEL=openrouter:openai/gpt-4o-mini \
+python -m agentlens.eval --scenario-id tc-001
+```
+
+Current AG2 support is intentionally scoped to single-agent runs for the built-in presets. GroupChat, handoff, A2A server, and custom AG2 entrypoints are not included in v1.
+
 ## Benchmarks
 
 AgentLens loads benchmark data at runtime from `data/benchmarks/<slug>/`.
@@ -283,6 +305,7 @@ Minimal `.env`:
 
 ```bash
 GOOGLE_API_KEY=your-key
+AGENT_FRAMEWORK=langgraph
 AGENT_MODEL=gemini:gemini-2.5-flash
 JUDGE_MODEL=gemini:gemini-2.5-flash-lite
 ```
@@ -291,6 +314,7 @@ Full `.env.example` is included in the repo. Notable options:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
+| `AGENT_FRAMEWORK` | Agent runtime backend (`langgraph` or `ag2`) | `langgraph` |
 | `AGENT_MODEL` | Model for the agent | — |
 | `JUDGE_MODEL` | Model for L2 scoring | — |
 | `AGENT_MAX_TOKENS` | Agent output token limit | `2048` |

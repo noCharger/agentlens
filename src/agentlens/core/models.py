@@ -152,6 +152,7 @@ class EvalRunRecord(BaseModel):
     source: str
     created_at: datetime = Field(default_factory=utc_now)
     dataset_version_id: str | None = None
+    agent_framework: str = ""
     agent_model: str = ""
     judge_model: str = ""
     cases: list[EvalCaseRecord] = Field(default_factory=list)

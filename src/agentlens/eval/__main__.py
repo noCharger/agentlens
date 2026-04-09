@@ -379,6 +379,7 @@ def _handle_platform_outputs(args, results, settings, *, dataset_version=None) -
         dataset_name=_resolve_platform_dataset_name(args),
         run_name=_resolve_platform_run_name(args),
         source="cli",
+        agent_framework=getattr(settings, "agent_framework", "langgraph"),
         agent_model=settings.agent_model,
         judge_model=settings.judge_model if args.level2 else "",
         dataset_record=dataset_version,
@@ -432,6 +433,11 @@ def main():
             "Override agent model, for example gemini:gemini-2.5-flash, "
             "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, or zhipu:glm-4-plus"
         ),
+    )
+    parser.add_argument(
+        "--agent-framework",
+        choices=["langgraph", "ag2"],
+        help="Override the agent runtime framework.",
     )
     parser.add_argument(
         "--judge-model",
@@ -545,6 +551,8 @@ def main():
         settings_overrides = {}
         if args.agent_model:
             settings_overrides["agent_model"] = args.agent_model
+        if args.agent_framework:
+            settings_overrides["agent_framework"] = args.agent_framework
         if args.judge_model:
             settings_overrides["judge_model"] = args.judge_model
         settings = get_settings(**settings_overrides)
@@ -601,7 +609,11 @@ def main():
             f"[dim]Zhipu key check passed ({zhipu_summary.formatted_status})[/dim]"
         )
 
-    console.print(f"\nRunning [bold]{len(scenarios)}[/bold] scenarios with [cyan]{settings.agent_model}[/cyan]")
+    agent_framework = getattr(settings, "agent_framework", "langgraph")
+    console.print(
+        f"\nRunning [bold]{len(scenarios)}[/bold] scenarios with "
+        f"[cyan]{settings.agent_model}[/cyan] via [magenta]{agent_framework}[/magenta]"
+    )
     if args.level2:
         console.print(f"L2 judge: [cyan]{settings.judge_model}[/cyan]")
     console.print()

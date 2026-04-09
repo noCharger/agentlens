@@ -79,3 +79,18 @@ def test_create_agent_passes_agent_max_tokens(monkeypatch):
 
     assert captured["model"] == "openrouter:openai/gpt-4.1"
     assert captured["max_tokens"] == 321
+
+
+def test_create_agent_uses_runtime_for_ag2(monkeypatch):
+    runtime = SimpleNamespace(agent=object())
+    monkeypatch.setattr("agentlens.agents.factory.create_agent_runtime", lambda *args, **kwargs: runtime)
+
+    settings = SimpleNamespace(
+        agent_framework="ag2",
+        agent_model="openrouter:openai/gpt-4.1",
+        agent_max_tokens=321,
+    )
+
+    agent = create_agent(settings, preset="full")
+
+    assert agent is runtime.agent

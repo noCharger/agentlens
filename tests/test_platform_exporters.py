@@ -118,6 +118,7 @@ def test_build_eval_run_record_summarizes_pass_rate():
     run = build_eval_run_record(
         [passed, failed],
         name="nightly",
+        agent_framework="ag2",
         agent_model="gemini:gemini-2.5-flash",
     )
 
@@ -125,6 +126,7 @@ def test_build_eval_run_record_summarizes_pass_rate():
     assert run.summary.passed == 1
     assert run.summary.failed == 1
     assert run.summary.pass_rate == 50.0
+    assert run.agent_framework == "ag2"
     assert run.agent_model == "gemini:gemini-2.5-flash"
 
 

@@ -75,10 +75,12 @@ class TestExperimentComparison:
 
     def test_versioned_config(self):
         baseline_config = VersionedConfig(
+            agent_framework="langgraph",
             agent_model="gemini:gemini-2.5-flash",
             prompt_version="v1.0",
         )
         candidate_config = VersionedConfig(
+            agent_framework="ag2",
             agent_model="gemini:gemini-2.5-flash",
             prompt_version="v2.0",
         )
@@ -89,6 +91,8 @@ class TestExperimentComparison:
             baseline_config=baseline_config,
             candidate_config=candidate_config,
         )
+        assert result.baseline_config.agent_framework == "langgraph"
+        assert result.candidate_config.agent_framework == "ag2"
         assert result.baseline_config.prompt_version == "v1.0"
         assert result.candidate_config.prompt_version == "v2.0"
 

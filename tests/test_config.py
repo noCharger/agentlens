@@ -11,6 +11,7 @@ def test_settings_with_explicit_values():
     assert s.openrouter_api_base == "https://openrouter.ai/api/v1"
     assert s.zhipu_api_base == "https://open.bigmodel.cn/api/paas/v4"
     assert s.agent_model == DEFAULT_AGENT_MODEL
+    assert s.agent_framework == "langgraph"
     assert s.agent_max_tokens == 2048
     assert s.judge_model == DEFAULT_JUDGE_MODEL
     assert s.judge_max_tokens == 512
@@ -38,12 +39,14 @@ def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("ZHIPU_API_KEY", "zp-env-key")
     monkeypatch.setenv("ZHIPU_API_BASE", "https://open.bigmodel.cn")
     monkeypatch.setenv("AGENT_MODEL", "openrouter:openai/gpt-4o-mini")
+    monkeypatch.setenv("AGENT_FRAMEWORK", "ag2")
     s = AgentLensSettings(_env_file=None)
     assert s.openrouter_api_key == "or-env-key"
     assert s.openrouter_api_base == "https://openrouter.ai"
     assert s.zhipu_api_key == "zp-env-key"
     assert s.zhipu_api_base == "https://open.bigmodel.cn"
     assert s.agent_model == "openrouter:openai/gpt-4o-mini"
+    assert s.agent_framework == "ag2"
 
 
 def test_settings_allow_missing_keys_until_model_is_used(monkeypatch):

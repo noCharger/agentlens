@@ -28,6 +28,7 @@ _FEATURE_FLAG_NAMES = (
 @dataclass
 class VersionedConfig:
     """Captures a specific configuration version for comparison."""
+    agent_framework: str = "langgraph"
     agent_model: str = ""
     judge_model: str = ""
     prompt_version: str = ""

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -37,6 +39,10 @@ class AgentLensSettings(BaseSettings):
             "Agent model selection, for example gemini:gemini-2.5-flash, "
             "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, or zhipu:glm-4-plus"
         ),
+    )
+    agent_framework: Literal["langgraph", "ag2"] = Field(
+        default="langgraph",
+        description="Agent runtime framework to execute scenarios with.",
     )
     agent_max_tokens: int = Field(
         default=2048,

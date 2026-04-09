@@ -564,9 +564,9 @@ def _create_provider(otlp_endpoint: str) -> tuple[TracerProvider, InMemorySpanEx
 
 
 def _teardown(provider: TracerProvider, instrumentor) -> None:
-    from agentlens.observability.instrument import uninstrument_langchain
+    from agentlens.observability.instrument import uninstrument_runtime
 
-    uninstrument_langchain(instrumentor)
+    uninstrument_runtime(instrumentor)
     provider.force_flush()
     provider.shutdown()
 
@@ -597,12 +597,12 @@ def execute_and_eval(
             "This scenario requires LLM-as-Judge scoring. Re-run with --level2 enabled.",
         )
 
-    from agentlens.observability.instrument import instrument_langchain
     from agentlens.observability.custom_spans import (
         agent_run_span,
         finalize_run_span,
         set_custom_tracer_provider,
     )
+    from agentlens.agents.runtime import create_agent_runtime
 
     if scenario.setup_commands:
         try:
@@ -616,7 +616,9 @@ def execute_and_eval(
 
     provider, mem_exporter = _create_provider(settings.otel_exporter_otlp_endpoint)
     actual_preset = _resolve_preset(preset, set(scenario.expected.tools_called))
-    instrumentor = instrument_langchain(provider)
+    agent_framework = getattr(settings, "agent_framework", "langgraph")
+    runtime = create_agent_runtime(settings, preset=actual_preset, scenario=scenario)
+    instrumentor = runtime.instrument(provider)
     set_custom_tracer_provider(provider)
 
     final_result: EvalResult | None = None
@@ -638,9 +640,10 @@ def execute_and_eval(
             evaluation_mode=scenario.evaluation_mode,
         ) as run_span:
             run_span.set_attribute("agent.preset", actual_preset)
+            run_span.set_attribute("agent.framework", agent_framework)
 
             try:
-                invoke_result = _invoke_agent_with_retries(settings, actual_preset, scenario)
+                invoke_result = _invoke_agent_with_retries(runtime, scenario)
             except KeyboardInterrupt:
                 finalize_run_span(run_span, total_steps=0, success=False, error="Interrupted")
                 raise
@@ -664,20 +667,16 @@ def execute_and_eval(
                         error=final_result.error,
                     )
                 else:
-                    output_text = ""
-                    final_messages = invoke_result.get("messages", [])
-                    if final_messages:
-                        last_msg = final_messages[-1]
-                        output_text = _normalize_content(
-                            last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-                        )
+                    output_text = invoke_result.output_text
+                    if output_text:
                         tracer = provider.get_tracer("agentlens.eval")
                         with tracer.start_as_current_span("agent.output") as output_span:
                             output_span.set_attribute("agent.output", output_text)
                             output_span.set_attribute("agent.scenario_id", scenario.id)
+                            output_span.set_attribute("agent.framework", agent_framework)
 
                     provider.force_flush()
-                    spans = list(mem_exporter.get_finished_spans())
+                    spans = runtime.normalize_spans(list(mem_exporter.get_finished_spans()))
                     final_result = evaluate_scenario(scenario, spans)
 
                     _feature_flags = dict(
@@ -694,7 +693,7 @@ def execute_and_eval(
                             **_feature_flags,
                         )
                         provider.force_flush()
-                        spans = list(mem_exporter.get_finished_spans())
+                        spans = runtime.normalize_spans(list(mem_exporter.get_finished_spans()))
 
                     final_result.feature_flags = dict(resolved_feature_flags)
                     _annotate_eval_span(run_span, scenario, final_result)
@@ -719,16 +718,13 @@ def execute_and_eval(
     return final_result
 
 
-def _invoke_agent_with_retries(settings, preset, scenario):
+def _invoke_agent_with_retries(runtime, scenario):
     last_error = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            from agentlens.agents.factory import create_agent
-
-            agent = create_agent(settings, preset=preset, scenario=scenario)
-            return agent.invoke(
-                {"messages": [("user", scenario.input_query)]},
-                config={"recursion_limit": scenario.expected.max_steps * 2},
+            return runtime.invoke(
+                scenario.input_query,
+                max_steps=scenario.expected.max_steps,
             )
         except Exception as e:
             last_error = e
