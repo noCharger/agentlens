@@ -218,3 +218,18 @@ class AuditEventRecord(BaseModel):
     resource_id: str
     occurred_at: datetime = Field(default_factory=utc_now)
     details: dict[str, object] = Field(default_factory=dict)
+
+
+class EvolutionRecord(BaseModel):
+    id: str
+    cycle: int
+    baseline_run_id: str
+    candidate_run_id: str
+    signal_summary: dict[str, object] = Field(default_factory=dict)
+    original_prompt: str
+    evolved_prompt: str
+    rationale: str
+    targeted_patterns: list[str] = Field(default_factory=list)
+    delta_pass_rate: float
+    accepted: bool
+    created_at: datetime = Field(default_factory=utc_now)

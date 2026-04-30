@@ -71,6 +71,10 @@ class AgentMetrics:
             "llm.tokens.completion",
             description="Number of completion tokens per LLM call",
         )
+        self.eval_memory_retention_score = self._meter.create_histogram(
+            "eval.memory.retention_score",
+            description="Memory retention score (recall fraction) per memory scenario",
+        )
 
     def record_agent_run(
         self,
@@ -196,3 +200,20 @@ class AgentMetrics:
         self.llm_latency.record(latency_s, attrs)
         self.llm_tokens_prompt.record(prompt_tokens, attrs)
         self.llm_tokens_completion.record(completion_tokens, attrs)
+
+    def record_memory_retention(
+        self,
+        score: float,
+        *,
+        benchmark: str = "",
+        category: str = "",
+        evaluation_mode: str = "",
+    ) -> None:
+        attrs: dict[str, str] = {}
+        if benchmark:
+            attrs["benchmark"] = benchmark
+        if category:
+            attrs["category"] = category
+        if evaluation_mode:
+            attrs["evaluation_mode"] = evaluation_mode
+        self.eval_memory_retention_score.record(score, attrs)

@@ -61,6 +61,7 @@ class LangGraphRuntime:
         *,
         preset: str,
         scenario=None,
+        system_prompt: str | None = None,
     ):
         from langgraph.prebuilt import create_react_agent
 
@@ -72,7 +73,10 @@ class LangGraphRuntime:
             settings.agent_model,
             max_tokens=settings.agent_max_tokens,
         )
-        self.agent = create_react_agent(llm, tools)
+        kwargs = {}
+        if system_prompt:
+            kwargs["prompt"] = system_prompt
+        self.agent = create_react_agent(llm, tools, **kwargs)
 
     def instrument(self, tracer_provider: TracerProvider) -> RuntimeInstrumentor:
         from agentlens.observability.instrument import instrument_runtime
@@ -106,6 +110,7 @@ class AG2Runtime:
         *,
         preset: str,
         scenario=None,
+        system_prompt: str | None = None,
     ):
         try:
             from autogen import AssistantAgent
@@ -120,7 +125,7 @@ class AG2Runtime:
         self.tools = build_ag2_tools(tool_names, shell_policy=shell_policy)
         self.agent = AssistantAgent(
             name="assistant",
-            system_message=_AG2_SYSTEM_MESSAGE,
+            system_message=system_prompt if system_prompt else _AG2_SYSTEM_MESSAGE,
             llm_config=_build_ag2_llm_config(settings),
             human_input_mode="NEVER",
         )
@@ -182,12 +187,17 @@ def create_agent_runtime(
     preset: str = "full",
     *,
     scenario=None,
+    system_prompt: str | None = None,
 ) -> AgentRuntime:
     framework = getattr(settings, "agent_framework", "langgraph")
     if framework == "langgraph":
-        return LangGraphRuntime(settings, preset=preset, scenario=scenario)
+        return LangGraphRuntime(
+            settings, preset=preset, scenario=scenario, system_prompt=system_prompt
+        )
     if framework == "ag2":
-        return AG2Runtime(settings, preset=preset, scenario=scenario)
+        return AG2Runtime(
+            settings, preset=preset, scenario=scenario, system_prompt=system_prompt
+        )
     raise ValueError(f"Unsupported agent framework '{framework}'.")
 
 

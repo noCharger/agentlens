@@ -1,0 +1,28 @@
+id: mem-003
+name: "Temporal Ordering and Interval"
+category: memory
+evaluation_mode: llm_judge
+input:
+  query: >
+    Three deployment events occurred: Deploy A on January 5, Deploy B on January 10,
+    and Deploy C on January 18. Read the file /tmp/mem003/incidents.txt to see
+    which deployment caused an incident. Then answer: (1) which deployment happened
+    first, (2) how many days elapsed between Deploy A and Deploy C, and (3) did the
+    incident happen before or after the midpoint between Deploy A and Deploy C?
+  setup:
+    - "mkdir -p /tmp/mem003"
+    - "echo 'Incident linked to: Deploy B (January 10)' > /tmp/mem003/incidents.txt"
+expected:
+  tools_called: ["read_file"]
+  max_steps: 5
+  output_contains: ["Deploy A", "13 days"]
+memory_anchors:
+  - "Deploy A"
+  - "13 days"
+judge_rubric: "memory_fidelity"
+judge_threshold: 4.0
+reference_answer: >
+  (1) Deploy A happened first (January 5).
+  (2) 13 days elapsed between Deploy A (Jan 5) and Deploy C (Jan 18).
+  (3) The midpoint is January 11 or 12; Deploy B (January 10) occurred before
+  the midpoint.

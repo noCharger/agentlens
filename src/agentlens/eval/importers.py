@@ -178,6 +178,65 @@ def _format_rubric_text(raw: Any) -> str:
     return str(raw)
 
 
+_ANCHOR_STOP_WORDS: frozenset[str] = frozenset(
+    {
+        "the", "and", "that", "this", "with", "from", "have", "were", "they",
+        "their", "about", "which", "there", "when", "what", "your", "will",
+        "said", "each", "also", "been", "more", "some", "then", "than",
+        "into", "over", "after", "before", "between", "through", "during",
+        "because", "however", "although", "therefore", "while",
+    }
+)
+
+_ANCHOR_DATE_PATTERN = re.compile(
+    r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}"
+    r"|(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+    r"\s+\d{1,2}(?:,\s*\d{4})?)\b"
+)
+_ANCHOR_QUOTED_PATTERN = re.compile(r'"([^"]{2,40})"')
+_ANCHOR_NUMBER_PATTERN = re.compile(r"\b\d[\d,._]*\b")
+_ANCHOR_PROPER_NOUN_PATTERN = re.compile(r"\b([A-Z][a-z]{3,})\b")
+_ANCHOR_ACRONYM_PATTERN = re.compile(r"\b([A-Z]{2,})\b")
+
+
+def _extract_anchor_tokens(text: str) -> list[str]:
+    """Extract up to 5 memorable tokens from an answer string.
+
+    Collects numbers, quoted strings, proper nouns (capitalised words of 4+ chars),
+    and dates.  Stop words are filtered out and the result is deduplicated while
+    preserving discovery order.
+    """
+    seen: set[str] = set()
+    tokens: list[str] = []
+
+    def _add(token: str) -> None:
+        normalised = token.strip()
+        if normalised and normalised not in seen:
+            seen.add(normalised)
+            tokens.append(normalised)
+
+    for match in _ANCHOR_DATE_PATTERN.finditer(text):
+        _add(match.group(0))
+
+    for match in _ANCHOR_QUOTED_PATTERN.finditer(text):
+        _add(match.group(1))
+
+    for match in _ANCHOR_NUMBER_PATTERN.finditer(text):
+        _add(match.group(0))
+
+    for match in _ANCHOR_PROPER_NOUN_PATTERN.finditer(text):
+        word = match.group(1)
+        if word.casefold() not in _ANCHOR_STOP_WORDS:
+            _add(word)
+
+    for match in _ANCHOR_ACRONYM_PATTERN.finditer(text):
+        word = match.group(1)
+        if word.casefold() not in _ANCHOR_STOP_WORDS:
+            _add(word)
+
+    return tokens[:5]
+
+
 class BenchmarkImporter:
     info: BenchmarkImporterInfo
     default_category: str
@@ -746,6 +805,322 @@ class ArtificialAnalysisImporter(ManifestBenchmarkImporter):
         return _discover_manifest_inputs(local_root)
 
 
+class LongMemEvalImporter(RecordBenchmarkImporter):
+    info = BenchmarkImporterInfo(
+        slug="longmemeval",
+        source_kind="records",
+        visibility="public",
+        default_evaluation_mode="llm_judge",
+        description=(
+            "Imports LongMemEval long-term memory scenarios with six question types: "
+            "single-session-user, single-session-assistant, multi-session, temporal, "
+            "knowledge-update, and abstention (ICLR 2025)."
+        ),
+    )
+    default_category = "memory"
+
+    def discover_input_paths(self, local_root: Path) -> list[Path]:
+        # Standard extensions first; fall back to extension-less files (HF distributes
+        # longmemeval_oracle / longmemeval_s / longmemeval_m without a .json suffix).
+        standard = _discover_manifest_inputs(local_root)
+        if standard:
+            return standard
+        return sorted(
+            p for p in local_root.iterdir()
+            if p.is_file() and not p.name.startswith(".") and p.suffix == ""
+        )
+
+    def iter_items(self, input_path: Path) -> Iterable[dict[str, Any]]:
+        if input_path.suffix == "":
+            payload = json.loads(input_path.read_text(encoding="utf-8"))
+            records = payload if isinstance(payload, list) else [payload]
+            return iter(records)
+        return _load_records(input_path)
+
+    @staticmethod
+    def _format_conversation(turns: list[dict[str, Any]], max_chars: int = 12000) -> str:
+        """Render a list of {role, content} dicts as plain text, truncating to max_chars."""
+        lines: list[str] = []
+        for turn in turns:
+            role = str(turn.get("role", "")).strip()
+            content = str(turn.get("content", "")).strip()
+            if role.casefold() in {"user", "human"}:
+                label = "[User]"
+            elif role.casefold() in {"assistant", "ai", "bot"}:
+                label = "[Assistant]"
+            else:
+                label = f"[{role}]" if role else "[Turn]"
+            lines.append(f"{label}: {content}")
+
+        full_text = "\n".join(lines)
+        if len(full_text) <= max_chars:
+            return full_text
+
+        # Truncate: drop leading turns until the text fits
+        while len(lines) > 1 and len("\n".join(lines)) > max_chars:
+            lines.pop(0)
+        return "\n".join(lines)
+
+    def make_scenario(self, item: dict[str, Any], index: int, input_path: Path) -> Scenario:
+        qid = str(
+            _first_nonempty(item, "question_id", "qid", "id", "q_id") or f"item-{index:04d}"
+        )
+        question = str(_first_nonempty(item, "question") or "").strip()
+        answer = str(
+            _first_nonempty(item, "answer", "answer_text", "ground_truth") or ""
+        ).strip()
+        question_type = str(item.get("question_type", "")).strip()
+
+        turns: list[dict[str, Any]] = []
+        # haystack_sessions is a list of sessions, each session a list of turns
+        haystack = item.get("haystack_sessions")
+        if isinstance(haystack, list) and haystack:
+            for session in haystack:
+                if isinstance(session, list):
+                    turns.extend(session)
+                elif isinstance(session, dict):
+                    turns.append(session)
+        else:
+            raw_conv = _first_nonempty(item, "conversation", "history", "messages")
+            if isinstance(raw_conv, list):
+                turns = raw_conv
+            elif isinstance(raw_conv, str):
+                stripped = raw_conv.strip()
+                if stripped.startswith("["):
+                    try:
+                        parsed = json.loads(stripped)
+                        if isinstance(parsed, list):
+                            turns = parsed
+                    except json.JSONDecodeError:
+                        pass
+
+        conv_text = self._format_conversation(turns) if turns else "(no conversation history)"
+
+        safe_qid = re.sub(r"[^a-zA-Z0-9._-]+", "-", qid).strip("-._").lower() or "item"
+        tmp_file = f"/tmp/longmemeval/{safe_qid}.txt"
+
+        setup_commands = [
+            "mkdir -p /tmp/longmemeval",
+            f"echo {json.dumps(conv_text)} > {tmp_file}",
+        ]
+
+        input_query = (
+            f"Conversation history is stored at {tmp_file}. "
+            f"Read the file and answer the following question using only information "
+            f"from the conversation: {question}"
+        )
+
+        memory_anchors = _extract_anchor_tokens(answer)
+        memory_poison: list[str] = []
+        # knowledge-update questions require the agent to use the UPDATED value from
+        # the conversation, discarding any earlier stale fact.  We cannot predict the
+        # stale string here, so we leave poison empty and rely on the L2 judge.
+        safety_checks = True
+
+        name_prefix = question_type if question_type else "memory"
+        name = _safe_name(
+            f"{name_prefix}: {question[:80]}",
+            fallback=f"LongMemEval {index}",
+        )
+
+        metadata = {
+            "question_type": question_type,
+            "qid": qid,
+            "source_path": str(input_path),
+        }
+
+        return Scenario(
+            id=self._compose_scenario_id(qid, index),
+            name=name,
+            category=self.default_category,
+            benchmark=self.info.slug,
+            evaluation_mode="llm_judge",
+            input=input_query,
+            setup=setup_commands,
+            expected=ExpectedResult(
+                tools_called=["read_file"],
+                max_steps=4,
+                output_contains=[],
+                safety_checks=safety_checks,
+            ),
+            memory_anchors=memory_anchors,
+            memory_poison=memory_poison,
+            judge_rubric="memory_fidelity",
+            judge_threshold=4.0,
+            reference_answer=answer,
+            metadata=_sanitize_value(metadata),
+        )
+
+
+class LoCoMoImporter(RecordBenchmarkImporter):
+    info = BenchmarkImporterInfo(
+        slug="locomo",
+        source_kind="records",
+        visibility="public",
+        default_evaluation_mode="llm_judge",
+        description=(
+            "Imports LoCoMo long conversation memory scenarios with 7K+ Q&A pairs "
+            "across single-hop, multi-hop, temporal, and adversarial question types."
+        ),
+    )
+    default_category = "memory"
+
+    def discover_input_paths(self, local_root: Path) -> list[Path]:
+        return _discover_manifest_inputs(local_root)
+
+    @staticmethod
+    def _format_conversation(turns: list[dict[str, Any]], max_chars: int = 12000) -> str:
+        """Render a list of {role, content} dicts as plain text, truncating to max_chars."""
+        lines: list[str] = []
+        for turn in turns:
+            role = str(turn.get("role", "")).strip()
+            content = str(turn.get("content", "")).strip()
+            if role.casefold() in {"user", "human"}:
+                label = "[User]"
+            elif role.casefold() in {"assistant", "ai", "bot"}:
+                label = "[Assistant]"
+            else:
+                label = f"[{role}]" if role else "[Turn]"
+            lines.append(f"{label}: {content}")
+
+        full_text = "\n".join(lines)
+        if len(full_text) <= max_chars:
+            return full_text
+
+        while len(lines) > 1 and len("\n".join(lines)) > max_chars:
+            lines.pop(0)
+        return "\n".join(lines)
+
+    def _make_one_scenario(
+        self,
+        qa_id: str,
+        question: str,
+        answer: str,
+        q_type: str,
+        turns: list[dict[str, Any]],
+        index: int,
+        input_path: Path,
+    ) -> Scenario:
+        conv_text = self._format_conversation(turns) if turns else "(no conversation history)"
+        safe_id = re.sub(r"[^a-zA-Z0-9._-]+", "-", qa_id).strip("-._").lower() or "item"
+        tmp_file = f"/tmp/locomo/{safe_id}.txt"
+
+        setup_commands = [
+            "mkdir -p /tmp/locomo",
+            f"echo {json.dumps(conv_text)} > {tmp_file}",
+        ]
+
+        input_query = (
+            f"Conversation history is at {tmp_file}. "
+            f"Read it and answer using only what's in the conversation: {question}"
+        )
+
+        is_adversarial = q_type == "adversarial"
+        memory_anchors = _extract_anchor_tokens(answer)
+        memory_poison: list[str] = (
+            ["I'm not sure", "unclear", "cannot determine"] if is_adversarial else []
+        )
+
+        name_prefix = q_type if q_type else "memory"
+        name = _safe_name(
+            f"{name_prefix}: {question[:80]}",
+            fallback=f"LoCoMo {index}",
+        )
+
+        metadata = {
+            "question_type": q_type,
+            "qa_id": qa_id,
+            "source_path": str(input_path),
+        }
+
+        return Scenario(
+            id=self._compose_scenario_id(qa_id, index),
+            name=name,
+            category=self.default_category,
+            benchmark=self.info.slug,
+            evaluation_mode="llm_judge",
+            input=input_query,
+            setup=setup_commands,
+            expected=ExpectedResult(
+                tools_called=["read_file"],
+                max_steps=4,
+                output_contains=[],
+            ),
+            memory_anchors=memory_anchors,
+            memory_poison=memory_poison,
+            judge_rubric="memory_fidelity",
+            judge_threshold=4.0,
+            reference_answer=answer,
+            metadata=_sanitize_value(metadata),
+        )
+
+    def iter_items(self, input_path: Path) -> Iterable[Any]:
+        if input_path.is_dir():
+            raise ValueError(
+                f"{self.info.name} expects a file input (json/jsonl/yaml/csv/parquet), got directory {input_path}"
+            )
+        raw_records = _load_records(input_path)
+
+        # Detect layout: Layout B has a 'qa' list field on the record.
+        for record in raw_records:
+            qa_list = record.get("qa")
+            if isinstance(qa_list, list) and qa_list:
+                # Layout B — yield synthetic flat records for each QA pair.
+                raw_conv = _first_nonempty(record, "conversation", "history", "messages")
+                turns: list[dict[str, Any]] = []
+                if isinstance(raw_conv, list):
+                    turns = raw_conv
+                elif isinstance(raw_conv, str) and raw_conv.strip().startswith("["):
+                    try:
+                        parsed = json.loads(raw_conv)
+                        if isinstance(parsed, list):
+                            turns = parsed
+                    except json.JSONDecodeError:
+                        pass
+                conv_id = str(
+                    _first_nonempty(record, "conversation_id", "id") or "conv"
+                )
+                for qa_item in qa_list:
+                    qa_id = str(
+                        _first_nonempty(qa_item, "id", "qid") or conv_id
+                    )
+                    yield {
+                        "__layout": "B",
+                        "id": qa_id,
+                        "question": qa_item.get("question", ""),
+                        "answer": qa_item.get("answer", ""),
+                        "type": qa_item.get("type", ""),
+                        "__turns": turns,
+                    }
+            else:
+                # Layout A — plain flat record with optional embedded conversation.
+                yield dict(record)
+
+    def make_scenario(self, item: dict[str, Any], index: int, input_path: Path) -> Scenario:
+        qa_id = str(_first_nonempty(item, "id", "qid") or f"item-{index:04d}")
+        question = str(_first_nonempty(item, "question") or "").strip()
+        answer = str(_first_nonempty(item, "answer", "answer_text", "ground_truth") or "").strip()
+        q_type = str(item.get("type", "")).strip()
+
+        # Prefer pre-resolved turns from Layout B, then parse from the record.
+        if "__turns" in item:
+            turns = item["__turns"]
+        else:
+            raw_conv = _first_nonempty(item, "conversation", "history", "messages")
+            turns = []
+            if isinstance(raw_conv, list):
+                turns = raw_conv
+            elif isinstance(raw_conv, str) and raw_conv.strip().startswith("["):
+                try:
+                    parsed = json.loads(raw_conv)
+                    if isinstance(parsed, list):
+                        turns = parsed
+                except json.JSONDecodeError:
+                    pass
+
+        return self._make_one_scenario(qa_id, question, answer, q_type, turns, index, input_path)
+
+
 IMPORTERS: dict[str, BenchmarkImporter] = {
     importer.info.slug: importer
     for importer in (
@@ -757,6 +1132,8 @@ IMPORTERS: dict[str, BenchmarkImporter] = {
         ToolathlonImporter(),
         MMClawBenchImporter(),
         ArtificialAnalysisImporter(),
+        LongMemEvalImporter(),
+        LoCoMoImporter(),
     )
 }
 

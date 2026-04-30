@@ -1,0 +1,23 @@
+id: mem-001
+name: "Single Fact Extraction"
+category: memory
+evaluation_mode: llm_judge
+input:
+  query: >
+    A new customer has been registered. Their customer ID is CUST-7823 and their
+    account tier is Gold. Read the file /tmp/mem001/orders.txt and report how
+    many orders they have. Make sure to include the customer ID CUST-7823 in
+    your final answer.
+  setup:
+    - "mkdir -p /tmp/mem001"
+    - "echo 'Order count: 4' > /tmp/mem001/orders.txt"
+expected:
+  tools_called: ["read_file"]
+  max_steps: 4
+  output_contains: ["CUST-7823", "4"]
+memory_anchors:
+  - "CUST-7823"
+  - "4"
+judge_rubric: "memory_fidelity"
+judge_threshold: 4.0
+reference_answer: "Customer CUST-7823 (Gold tier) has 4 orders."

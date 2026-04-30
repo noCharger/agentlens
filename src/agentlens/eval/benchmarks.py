@@ -90,6 +90,18 @@ _BUILTIN_BENCHMARKS: tuple[BenchmarkDefinition, ...] = (
         description="General-purpose agent benchmark family used for model comparison and analysis tasks.",
         aliases=("artificial analysis",),
     ),
+    BenchmarkDefinition(
+        slug="longmemeval",
+        name="LongMemEval",
+        description="Long-term memory evaluation across 5 question types: extraction, multi-hop, temporal, knowledge-update, abstention (ICLR 2025).",
+        aliases=("long mem eval", "longmem"),
+    ),
+    BenchmarkDefinition(
+        slug="locomo",
+        name="LoCoMo",
+        description="Long conversation memory benchmark with 7K+ Q&A pairs across single-hop, multi-hop, temporal, and adversarial types.",
+        aliases=("locomo bench",),
+    ),
 )
 
 _BENCHMARKS_BY_SLUG = {benchmark.slug: benchmark for benchmark in _BUILTIN_BENCHMARKS}

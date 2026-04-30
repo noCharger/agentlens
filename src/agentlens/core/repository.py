@@ -20,6 +20,7 @@ from agentlens.core.models import (
     AuditEventRecord,
     DatasetVersionRecord,
     EvalRunRecord,
+    EvolutionRecord,
     ProjectRecord,
     Role,
     TraceRecord,
@@ -371,6 +372,33 @@ class FileCoreRepository:
         if limit is None:
             return records[start:]
         return records[start : start + max(0, limit)]
+
+    def save_evolution_record(
+        self,
+        *,
+        project_name: str,
+        record: EvolutionRecord,
+        project_slug: str | None = None,
+    ) -> Path:
+        project = self.ensure_project(name=project_name, slug=project_slug)
+        path = self._records_dir(project.slug, "evolution") / f"{record.id}.json"
+        _write_json(path, record.model_dump(mode="json"))
+        return path
+
+    def load_evolution_records(
+        self, project_slug: str, limit: int | None = None, offset: int = 0
+    ) -> list[EvolutionRecord]:
+        return self._load_records(
+            project_slug, "evolution", EvolutionRecord, limit=limit, offset=offset
+        )
+
+    def load_active_prompt(self, project_slug: str) -> str | None:
+        """Return the evolved prompt from the most recent accepted EvolutionRecord, if any."""
+        records = self.load_evolution_records(project_slug)
+        accepted = [r for r in records if r.accepted]
+        if not accepted:
+            return None
+        return max(accepted, key=lambda r: r.created_at).evolved_prompt
 
     def _load_records(
         self,

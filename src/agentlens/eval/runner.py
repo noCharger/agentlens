@@ -34,6 +34,10 @@ from agentlens.eval.level1_deterministic.tool_params import (
 )
 from agentlens.eval.level1_deterministic.termination import TerminationResult, evaluate_termination
 from agentlens.eval.level1_deterministic.safety import SafetyResult, evaluate_safety
+from agentlens.eval.level1_deterministic.memory_retention import (
+    MemoryRetentionResult,
+    evaluate_memory_retention,
+)
 from agentlens.sandbox import prepare_benchmark_environment
 
 log = logging.getLogger("agentlens.eval")
@@ -124,6 +128,7 @@ class Level1Result:
     tool_params: ToolParamsResult | None = None
     termination: TerminationResult | None = None
     safety: SafetyResult | None = None
+    memory_retention: MemoryRetentionResult | None = None
 
     @property
     def passed(self) -> bool:
@@ -136,6 +141,8 @@ class Level1Result:
             return False
         if self.safety is not None and not self.safety.passed:
             return False
+        if self.memory_retention is not None and not self.memory_retention.passed:
+            return False
         return True
 
     @property
@@ -147,6 +154,8 @@ class Level1Result:
             checks["termination"] = self.termination.passed
         if self.safety is not None:
             checks["safety"] = self.safety.passed
+        if self.memory_retention is not None:
+            checks["memory_retention"] = self.memory_retention.passed
         return checks
 
     @property
@@ -191,6 +200,17 @@ class Level1Result:
         if self.safety is not None and not self.safety.passed:
             for violation in self.safety.violations:
                 reasons.append(f"Safety {violation.violation_type}: {violation.description}")
+
+        if self.memory_retention is not None and not self.memory_retention.passed:
+            if self.memory_retention.lost_anchors:
+                reasons.append(
+                    f"Memory: lost facts: {', '.join(self.memory_retention.lost_anchors)}"
+                )
+            if self.memory_retention.poison_hallucinated > 0:
+                reasons.append(
+                    f"Memory: hallucinated {self.memory_retention.poison_hallucinated} "
+                    "forbidden value(s)"
+                )
 
         return _dedupe_preserve_order(reasons)
 
@@ -347,7 +367,19 @@ def detect_risk_signals(spans: list[ReadableSpan], scenario: Scenario) -> list[s
     return signals
 
 
-def run_level1_eval(scenario: Scenario, spans: list[ReadableSpan]) -> Level1Result:
+def _extract_output_text_from_spans(spans: list[ReadableSpan]) -> str:
+    """Extract agent final output from spans (mirrors execute_and_eval output extraction)."""
+    for span in reversed(spans):
+        attrs = dict(span.attributes or {})
+        val = attrs.get("agent.output") or attrs.get("output.value")
+        if val:
+            return str(val)
+    return ""
+
+
+def run_level1_eval(
+    scenario: Scenario, spans: list[ReadableSpan], output_text: str = ""
+) -> Level1Result:
     trajectory_analysis = analyze_trajectory(
         spans,
         max_steps=scenario.expected.max_steps,
@@ -388,16 +420,30 @@ def run_level1_eval(scenario: Scenario, spans: list[ReadableSpan]) -> Level1Resu
             extra_forbidden_patterns=scenario.expected.forbidden_patterns or None,
         )
 
+    if scenario.memory_anchors or scenario.memory_poison:
+        effective_output = output_text or _extract_output_text_from_spans(spans)
+        result.memory_retention = evaluate_memory_retention(
+            spans,
+            output_text=effective_output,
+            memory_anchors=scenario.memory_anchors,
+            memory_poison=scenario.memory_poison,
+        )
+
     return result
 
 
-def evaluate_scenario(scenario: Scenario, spans: list[ReadableSpan]) -> EvalResult:
+def evaluate_scenario(
+    scenario: Scenario, spans: list[ReadableSpan], output_text: str = ""
+) -> EvalResult:
     try:
-        level1 = run_level1_eval(scenario, spans)
+        level1 = run_level1_eval(scenario, spans, output_text=output_text)
         risk_signals = detect_risk_signals(spans, scenario)
         if level1.safety and level1.safety.violations:
             for v in level1.safety.violations:
                 risk_signals.append(f"safety_{v.violation_type}:{v.description}")
+        if level1.memory_retention and level1.memory_retention.poison_hallucinated > 0:
+            n = level1.memory_retention.poison_hallucinated
+            risk_signals.append(f"poison_hallucinated:{n}")
         return EvalResult(scenario=scenario, level1=level1, risk_signals=risk_signals)
     except Exception as e:
         return _error_result(scenario, str(e))
@@ -450,6 +496,13 @@ def _annotate_eval_span(span, scenario: Scenario, result: EvalResult) -> None:
     if result.level1.safety is not None:
         span.set_attribute("eval.level1.safety_passed", result.level1.safety.passed)
         span.set_attribute("eval.level1.safety_violation_count", len(result.level1.safety.violations))
+    if result.level1.memory_retention is not None:
+        mr = result.level1.memory_retention
+        span.set_attribute("eval.level1.memory_retention_passed", mr.passed)
+        span.set_attribute("eval.level1.memory_retention_score", mr.retention_score)
+        span.set_attribute("eval.level1.memory_anchors_recalled", mr.anchors_recalled)
+        span.set_attribute("eval.level1.memory_anchors_actively_used", mr.anchors_actively_used)
+        span.set_attribute("eval.level1.memory_poison_hallucinated", mr.poison_hallucinated)
     if result.error:
         span.set_attribute("eval.error", result.error)
     if result.judge_overall_score is not None:
@@ -583,6 +636,7 @@ def execute_and_eval(
     answer_relevancy: bool = False,
     hallucination: bool = False,
     faithfulness: bool = False,
+    system_prompt: str | None = None,
 ) -> EvalResult:
     if scenario.evaluation_mode == "external":
         return _error_result(
@@ -617,7 +671,9 @@ def execute_and_eval(
     provider, mem_exporter = _create_provider(settings.otel_exporter_otlp_endpoint)
     actual_preset = _resolve_preset(preset, set(scenario.expected.tools_called))
     agent_framework = getattr(settings, "agent_framework", "langgraph")
-    runtime = create_agent_runtime(settings, preset=actual_preset, scenario=scenario)
+    runtime = create_agent_runtime(
+        settings, preset=actual_preset, scenario=scenario, system_prompt=system_prompt
+    )
     instrumentor = runtime.instrument(provider)
     set_custom_tracer_provider(provider)
 
@@ -677,7 +733,7 @@ def execute_and_eval(
 
                     provider.force_flush()
                     spans = runtime.normalize_spans(list(mem_exporter.get_finished_spans()))
-                    final_result = evaluate_scenario(scenario, spans)
+                    final_result = evaluate_scenario(scenario, spans, output_text=output_text)
 
                     _feature_flags = dict(
                         use_geval=use_geval,
@@ -915,6 +971,14 @@ def _record_metrics_best_effort(
             m.record_judge_score(
                 result.judge_overall_score,
                 dimension="overall",
+                benchmark=scenario.benchmark,
+                category=scenario.category,
+                evaluation_mode=scenario.evaluation_mode,
+            )
+
+        if result.level1.memory_retention is not None:
+            m.record_memory_retention(
+                result.level1.memory_retention.retention_score,
                 benchmark=scenario.benchmark,
                 category=scenario.category,
                 evaluation_mode=scenario.evaluation_mode,

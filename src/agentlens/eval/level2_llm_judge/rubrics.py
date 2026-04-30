@@ -105,4 +105,15 @@ RUBRIC_DEFINITIONS: dict[str, str] = {
         "3=partial support, 4=mostly supported with minor unsupported claims, "
         "5=fully supported by the available context."
     ),
+    "memory_fidelity": (
+        "Rate whether the agent correctly recalled and applied all facts given in the task "
+        "description across all reasoning steps without distortion, substitution, or hallucination. "
+        "Use this for temporal ordering, belief updates after tool output, and abstention tasks "
+        "where substring matching alone cannot confirm correct reasoning. "
+        "1=recalled nothing or hallucinated extensively, "
+        "2=recalled some with factual errors or wrong temporal ordering, "
+        "3=recalled most but dropped or distorted details, "
+        "4=recalled all with minor drift, "
+        "5=perfect recall, correct application, no hallucination."
+    ),
 }

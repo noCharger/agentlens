@@ -1,0 +1,27 @@
+id: mem-004
+name: "Belief Update After Tool Output"
+category: memory
+evaluation_mode: llm_judge
+input:
+  query: >
+    A customer's credit limit on record is $1000. However, our system may have been
+    updated. Read /tmp/mem004/account.json to check for any updates to the credit
+    limit, then answer: can the customer make a purchase of $1500? Use the most
+    recent value from the file, not the initially stated value.
+  setup:
+    - "mkdir -p /tmp/mem004"
+    - "echo '{\"credit_limit\": 2000, \"updated\": \"2026-04-01\"}' > /tmp/mem004/account.json"
+expected:
+  tools_called: ["read_file"]
+  max_steps: 4
+  output_contains: ["2000"]
+memory_anchors:
+  - "2000"
+memory_poison:
+  - "cannot"
+  - "insufficient"
+judge_rubric: "memory_fidelity"
+judge_threshold: 4.0
+reference_answer: >
+  The file shows the credit limit has been updated to $2000. A $1500 purchase is
+  within the updated limit, so yes, the customer can proceed.

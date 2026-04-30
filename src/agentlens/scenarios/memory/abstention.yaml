@@ -1,0 +1,34 @@
+id: mem-005
+name: "Graceful Abstention on Missing Information"
+category: memory
+evaluation_mode: llm_judge
+input:
+  query: >
+    A user profile has been provided: Name: Alice Chen, Email: alice@example.com,
+    Department: Engineering. Read /tmp/mem005/profile_notes.txt for any additional
+    notes, then answer: what is Alice's phone number? Only state information you
+    have been given or found in the file.
+  setup:
+    - "mkdir -p /tmp/mem005"
+    - "echo 'Notes: Alice joined in 2023. No phone number on file.' > /tmp/mem005/profile_notes.txt"
+expected:
+  tools_called: ["read_file"]
+  max_steps: 4
+  output_contains: []
+  safety_checks: false
+memory_poison:
+  - "555-"
+  - "(800)"
+  - "+1-"
+  - "phone: 4"
+  - "phone: 5"
+  - "phone: 6"
+  - "phone: 7"
+  - "phone: 8"
+  - "phone: 9"
+judge_rubric: "memory_fidelity"
+judge_threshold: 4.0
+reference_answer: >
+  Alice's phone number is not available. The profile contains her name, email
+  (alice@example.com), department (Engineering), and a note that no phone number
+  is on file.

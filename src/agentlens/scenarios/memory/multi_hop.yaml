@@ -1,0 +1,28 @@
+id: mem-002
+name: "Multi-Hop Fact Combination"
+category: memory
+evaluation_mode: llm_judge
+input:
+  query: >
+    Two service outages occurred recently. Outage A affected 120 users and lasted
+    3 hours. Outage B affected 85 users and lasted 5 hours. Read the file
+    /tmp/mem002/sla.txt for the penalty rate per user-hour, then calculate the
+    total SLA penalty for both outages combined and show your work.
+  setup:
+    - "mkdir -p /tmp/mem002"
+    - "echo 'Penalty rate: $2 per user-hour' > /tmp/mem002/sla.txt"
+expected:
+  tools_called: ["read_file"]
+  max_steps: 5
+  output_contains: ["120", "85", "2"]
+memory_anchors:
+  - "120"
+  - "85"
+  - "3"
+  - "5"
+judge_rubric: "memory_fidelity"
+judge_threshold: 4.0
+reference_answer: >
+  Outage A: 120 users × 3 hours × $2 = $720.
+  Outage B: 85 users × 5 hours × $2 = $850.
+  Total SLA penalty: $1570.

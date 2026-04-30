@@ -53,6 +53,8 @@ class Scenario(BaseModel):
     judge_threshold: float = 4.0
     reference_answer: str = ""
     context: list[str] = Field(default_factory=list)
+    memory_anchors: list[str] = Field(default_factory=list)
+    memory_poison: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"populate_by_name": True}
@@ -99,6 +101,8 @@ class Scenario(BaseModel):
             judge_threshold=data.get("judge_threshold", 4.0),
             reference_answer=data.get("reference_answer", ""),
             context=data.get("context", []),
+            memory_anchors=data.get("memory_anchors", []),
+            memory_poison=data.get("memory_poison", []),
             metadata=data.get("metadata", {}),
         )
 

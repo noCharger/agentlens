@@ -183,6 +183,17 @@ REPORT_TEMPLATE = Template("""\
           {% if r.level1.safety is not none %}
           <p><strong>Safety:</strong> {{ 'PASS' if r.level1.safety.passed else 'FAIL' }}</p>
           {% endif %}
+          {% if r.level1.memory_retention is not none %}
+          <p><strong>Memory Retention:</strong>
+            {{ r.level1.memory_retention.anchors_recalled }}/{{ r.level1.memory_retention.anchors_total }} anchors recalled
+            (score {{ "%.2f"|format(r.level1.memory_retention.retention_score) }})
+            {% if r.level1.memory_retention.anchors_actively_used %}&nbsp;· {{ r.level1.memory_retention.anchors_actively_used }} used in tool calls{% endif %}
+            {% if r.level1.memory_retention.poison_hallucinated %}&nbsp;·&nbsp;<span class="reason">{{ r.level1.memory_retention.poison_hallucinated }} poison string(s) found</span>{% endif %}
+          </p>
+          {% if r.level1.memory_retention.lost_anchors %}
+          <p class="reason">Lost anchors: {{ r.level1.memory_retention.lost_anchors | join(', ') }}</p>
+          {% endif %}
+          {% endif %}
           {% if r.level1.failure_reasons %}
           <p><strong>L1 Failure Reasons:</strong></p>
           {% for reason in r.level1.failure_reasons %}
