@@ -13,7 +13,7 @@ belief updates, and refusal quality that substring matching cannot confirm.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from opentelemetry.sdk.trace import ReadableSpan
 

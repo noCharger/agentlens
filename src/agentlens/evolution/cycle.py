@@ -6,9 +6,8 @@ signal (analogous to Memory-R1's QA exact-match reward — no intermediate op la
 
 from __future__ import annotations
 
-import dataclasses
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -51,7 +50,7 @@ class EvolutionCycle:
         self._agent_runner = agent_runner
 
     def run(self, config: EvolutionConfig) -> list[CycleResult]:
-        from agentlens.eval.runner import execute_and_eval, load_and_summarize
+        from agentlens.eval.runner import load_and_summarize
         from agentlens.agents.runtime import _AG2_SYSTEM_MESSAGE
         from agentlens.core.models import EvolutionRecord
 

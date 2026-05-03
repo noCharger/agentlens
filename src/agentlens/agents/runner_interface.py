@@ -48,7 +48,6 @@ class EmbeddedAgentRunner:
         from agentlens.agents.runtime import create_agent_runtime
         from agentlens.eval.runner import (
             MAX_RETRIES,
-            QuotaExhaustedError,
             _create_provider,
             _resolve_preset,
             _teardown,
