@@ -22,7 +22,6 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from typing import Any
-from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
@@ -82,7 +81,8 @@ def _emit_otel_spans(
 
 class _ProxyHandler(BaseHTTPRequestHandler):
     upstream: str = "https://api.openai.com"
-    log_message = lambda self, *a, **kw: None  # silence default access log
+    def log_message(self, *a, **kw) -> None:  # silence default access log
+        pass
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", 0))

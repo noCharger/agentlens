@@ -8,7 +8,7 @@ the failure patterns already detected by L1/L2.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from agentlens.eval.runner import EvalResult
 
