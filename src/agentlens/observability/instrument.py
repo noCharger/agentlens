@@ -66,6 +66,9 @@ def instrument_runtime(
             original_openaiwrapper_create=original_openaiwrapper_create,
         )
 
+    if framework in {"claude-code", "codex"}:
+        return NoopInstrumentor()
+
     raise ValueError(f"Unsupported agent framework '{framework}'.")
 
 

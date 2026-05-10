@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 SUPPORTED_MODEL_PROVIDERS = ("gemini", "deepseek", "openrouter", "zhipu")
+CLI_AGENT_FRAMEWORKS = frozenset({"claude-code", "codex"})
 DEFAULT_AGENT_MODEL = "gemini:gemini-2.5-flash"
 DEFAULT_JUDGE_MODEL = "gemini:gemini-2.5-flash-lite"
 
@@ -69,3 +70,7 @@ def required_api_key_env(provider: str) -> str:
     if provider == "zhipu":
         return "ZHIPU_API_KEY"
     raise ValueError(f"Unsupported model provider '{provider}'")
+
+
+def should_resolve_agent_model_for_framework(framework: str) -> bool:
+    return str(framework or "langgraph").casefold() not in CLI_AGENT_FRAMEWORKS

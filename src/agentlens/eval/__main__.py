@@ -34,7 +34,12 @@ from agentlens.eval.benchmarks import (
     summarize_results_by_benchmark,
 )
 from agentlens.eval.scenarios import load_runtime_scenarios
-from agentlens.eval.runner import EvalResult, execute_and_eval, QuotaExhaustedError
+from agentlens.eval.runner import (
+    EvalResult,
+    QuotaExhaustedError,
+    _is_endpoint_reachable,
+    execute_and_eval,
+)
 from agentlens.eval.level3_human.reporter import generate_report
 from agentlens.core.models import DatasetSource
 
@@ -187,6 +192,10 @@ def _init_metrics(settings):
     try:
         from agentlens.observability.setup import create_meter_provider
         from opentelemetry import metrics as otel_metrics
+
+        if not _is_endpoint_reachable(settings.otel_exporter_otlp_endpoint):
+            console.print("[dim]Metrics disabled; OTLP collector is not reachable[/dim]")
+            return None
 
         provider = create_meter_provider(settings)
         otel_metrics.set_meter_provider(provider)
@@ -431,12 +440,13 @@ def main():
         type=str,
         help=(
             "Override agent model, for example gemini:gemini-2.5-flash, "
-            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, or zhipu:glm-4-plus"
+            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, zhipu:glm-4-plus, "
+            "or a raw CLI model for claude-code/codex"
         ),
     )
     parser.add_argument(
         "--agent-framework",
-        choices=["langgraph", "ag2"],
+        choices=["langgraph", "ag2", "claude-code", "codex"],
         help="Override the agent runtime framework.",
     )
     parser.add_argument(

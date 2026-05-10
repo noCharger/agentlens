@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 
-from agentlens.agents.tool_registry import build_ag2_tools, build_langgraph_tools, get_tool_names_for_preset
+from agentlens.agents.tool_registry import (
+    build_ag2_tools,
+    build_langgraph_tools,
+    get_tool_names_for_preset,
+)
 from agentlens.config import AgentLensSettings
 from agentlens.llms import create_chat_llm
 from agentlens.model_selection import resolve_model_selection
@@ -182,6 +192,189 @@ class AG2Runtime:
         return normalized
 
 
+class _SubprocessCLIRuntime:
+    framework = ""
+    executable_name = ""
+    display_name = ""
+    executable_env_var = ""
+    executable_fallback_paths: tuple[str, ...] = ()
+
+    def __init__(
+        self,
+        settings: AgentLensSettings,
+        *,
+        preset: str,
+        scenario=None,
+        system_prompt: str | None = None,
+        timeout_seconds: float = 600.0,
+    ):
+        self.settings = settings
+        self.preset = preset
+        self.scenario = scenario
+        self.system_prompt = system_prompt
+        self.timeout_seconds = timeout_seconds
+        self.agent = self
+        self._last_spans: list[SpanView] = []
+        self._tool_names = get_tool_names_for_preset(preset)
+        self._allowed_dirs = _cli_allowed_dirs(scenario)
+        self._executable = self._resolve_executable()
+        if not self._executable:
+            raise RuntimeError(
+                f"{self.display_name} CLI executable "
+                f"'{self.executable_name}' was not found on PATH"
+                f"{self._fallback_hint()}."
+            )
+
+    def instrument(self, tracer_provider: TracerProvider) -> RuntimeInstrumentor:
+        from agentlens.observability.instrument import instrument_runtime
+
+        return instrument_runtime(self.framework, tracer_provider, target=self)
+
+    def invoke(self, query: str, *, max_steps: int) -> AgentInvocationResult:
+        cmd = self._build_command(max_steps=max_steps)
+        with tempfile.TemporaryDirectory(prefix=f"agentlens-{self.framework}-") as work_dir:
+            completed = subprocess.run(
+                cmd,
+                input=query,
+                text=True,
+                capture_output=True,
+                cwd=work_dir,
+                timeout=self.timeout_seconds,
+            )
+
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            suffix = f": {detail}" if detail else ""
+            raise RuntimeError(f"{self.display_name} CLI failed ({completed.returncode}){suffix}")
+
+        output_text, spans = self._parse_output(completed.stdout or "")
+        if not output_text and completed.stdout:
+            output_text = completed.stdout.strip()
+            if output_text:
+                spans.append(_make_output_span(output_text, len(spans)))
+        self._last_spans = spans
+        return AgentInvocationResult(raw_result=completed, output_text=output_text)
+
+    def normalize_spans(self, spans: list[ReadableSpan]) -> list[ReadableSpan | SpanView]:
+        return [*spans, *self._last_spans]
+
+    def _build_command(self, *, max_steps: int) -> list[str]:
+        raise NotImplementedError
+
+    def _parse_output(self, stdout: str) -> tuple[str, list[SpanView]]:
+        raise NotImplementedError
+
+    def _raw_model(self) -> str:
+        return str(getattr(self.settings, "agent_model", "") or "").strip()
+
+    def _configured_executable(self) -> str:
+        attr_name = f"{self.framework.replace('-', '_')}_cli_path"
+        configured = str(getattr(self.settings, attr_name, "") or "").strip()
+        if configured:
+            return configured
+        if self.executable_env_var:
+            return str(os.environ.get(self.executable_env_var, "") or "").strip()
+        return ""
+
+    def _resolve_executable(self) -> str | None:
+        configured = self._configured_executable()
+        if configured:
+            path = Path(configured).expanduser()
+            if path.is_file():
+                return str(path)
+            resolved = shutil.which(configured)
+            if resolved:
+                return resolved
+            raise RuntimeError(
+                f"{self.display_name} CLI configured path was not found: {configured}"
+            )
+
+        resolved = shutil.which(self.executable_name)
+        if resolved:
+            return resolved
+
+        for fallback in self.executable_fallback_paths:
+            path = Path(fallback).expanduser()
+            if path.is_file():
+                return str(path)
+        return None
+
+    def _fallback_hint(self) -> str:
+        hints = []
+        if self.executable_env_var:
+            hints.append(f"set {self.executable_env_var}")
+        if self.executable_fallback_paths:
+            joined = ", ".join(self.executable_fallback_paths)
+            hints.append(f"checked fallbacks: {joined}")
+        return "; " + "; ".join(hints) if hints else ""
+
+
+class ClaudeCodeRuntime(_SubprocessCLIRuntime):
+    framework = "claude-code"
+    executable_name = "claude"
+    display_name = "Claude Code"
+    executable_env_var = "CLAUDE_CODE_CLI_PATH"
+
+    def _build_command(self, *, max_steps: int) -> list[str]:
+        del max_steps
+        cmd = [
+            self._executable,
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--input-format",
+            "text",
+            "--no-session-persistence",
+            "--permission-mode",
+            "dontAsk",
+            "--allowedTools",
+            ",".join(_claude_allowed_tools(self._tool_names)),
+        ]
+        for allowed_dir in self._allowed_dirs:
+            cmd.extend(["--add-dir", allowed_dir])
+        model = self._raw_model()
+        if model:
+            cmd.extend(["--model", model])
+        if self.system_prompt:
+            cmd.extend(["--append-system-prompt", self.system_prompt])
+        return cmd
+
+    def _parse_output(self, stdout: str) -> tuple[str, list[SpanView]]:
+        return _parse_claude_code_events(stdout)
+
+
+class CodexRuntime(_SubprocessCLIRuntime):
+    framework = "codex"
+    executable_name = "codex"
+    display_name = "Codex"
+    executable_env_var = "CODEX_CLI_PATH"
+    executable_fallback_paths = ("/Applications/Codex.app/Contents/Resources/codex",)
+
+    def _build_command(self, *, max_steps: int) -> list[str]:
+        del max_steps
+        cmd = [
+            self._executable,
+            "exec",
+            "--json",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "-c",
+            'approval_policy="never"',
+            "--sandbox",
+            "workspace-write",
+        ]
+        for allowed_dir in self._allowed_dirs:
+            cmd.extend(["--add-dir", allowed_dir])
+        model = self._raw_model()
+        if model:
+            cmd.extend(["--model", model])
+        return cmd
+
+    def _parse_output(self, stdout: str) -> tuple[str, list[SpanView]]:
+        return _parse_codex_events(stdout)
+
+
 def create_agent_runtime(
     settings: AgentLensSettings,
     preset: str = "full",
@@ -198,7 +391,427 @@ def create_agent_runtime(
         return AG2Runtime(
             settings, preset=preset, scenario=scenario, system_prompt=system_prompt
         )
+    if framework == "claude-code":
+        return ClaudeCodeRuntime(
+            settings, preset=preset, scenario=scenario, system_prompt=system_prompt
+        )
+    if framework == "codex":
+        return CodexRuntime(
+            settings, preset=preset, scenario=scenario, system_prompt=system_prompt
+        )
     raise ValueError(f"Unsupported agent framework '{framework}'.")
+
+
+def _cli_allowed_dirs(scenario) -> list[str]:
+    dirs = ["/tmp"]
+    if scenario is None:
+        return dirs
+
+    metadata = getattr(scenario, "metadata", {}) or {}
+    for key in ("resolved_reference_files", "resolved_deliverable_files"):
+        raw_paths = metadata.get(key) or []
+        if not isinstance(raw_paths, list):
+            continue
+        for raw_path in raw_paths:
+            value = str(raw_path).strip()
+            if not value:
+                continue
+            dirs.append(str(Path(value).expanduser().resolve(strict=False).parent))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in dirs:
+        if path in seen:
+            continue
+        seen.add(path)
+        deduped.append(path)
+    return deduped
+
+
+def _claude_allowed_tools(tool_names: list[str]) -> list[str]:
+    allowed: list[str] = []
+    for name in tool_names:
+        if name == "read_file":
+            allowed.append("Read")
+        elif name == "write_file":
+            allowed.extend(["Write", "Edit", "MultiEdit"])
+        elif name == "shell":
+            allowed.append("Bash")
+        elif name == "duckduckgo_search":
+            allowed.extend(["WebSearch", "WebFetch"])
+    return _dedupe_strings(allowed) or ["Read"]
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _parse_json_lines(stdout: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events
+
+
+def _span_time(index: int) -> tuple[int, int]:
+    start = 1_000_000_000 + index * 1_000_000
+    return start, start + 500_000
+
+
+def _make_span(name: str, attributes: dict[str, Any], index: int) -> SpanView:
+    start, end = _span_time(index)
+    return SpanView(name=name, attributes=attributes, start_time=start, end_time=end)
+
+
+def _make_step_span(step_index: int, action: str, index: int) -> SpanView:
+    return _make_span(
+        "agent.step",
+        {
+            "step.index": step_index,
+            "step.action": action,
+            "step.thought": f"CLI requested {action}",
+        },
+        index,
+    )
+
+
+def _make_tool_span(
+    tool_name: str,
+    params: Any,
+    index: int,
+    *,
+    output: Any | None = None,
+) -> SpanView:
+    params_text = _stringify_tool_params(params)
+    attributes: dict[str, Any] = {
+        "openinference.span.kind": "TOOL",
+        "tool.name": tool_name,
+        "tool.params": params_text,
+        "input.value": params_text,
+    }
+    if output is not None:
+        attributes["tool.output"] = _normalize_output_content(output)
+    return _make_span(f"Tool: {tool_name}", attributes, index)
+
+
+def _make_output_span(output_text: str, index: int) -> SpanView:
+    return _make_span(
+        "agent.output",
+        {
+            "agent.output": output_text,
+            "output.value": output_text,
+        },
+        index,
+    )
+
+
+def _make_llm_span(
+    usage: Any,
+    model: Any,
+    index: int,
+) -> SpanView | None:
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = (
+        usage.get("input_tokens")
+        or usage.get("prompt_tokens")
+        or usage.get("input")
+        or usage.get("prompt")
+    )
+    completion_tokens = (
+        usage.get("output_tokens")
+        or usage.get("completion_tokens")
+        or usage.get("output")
+        or usage.get("completion")
+    )
+    if prompt_tokens is None and completion_tokens is None:
+        return None
+
+    attrs: dict[str, Any] = {"openinference.span.kind": "LLM"}
+    if model:
+        attrs["llm.model_name"] = str(model)
+    if prompt_tokens is not None:
+        attrs["llm.token_count.prompt"] = int(prompt_tokens)
+    if completion_tokens is not None:
+        attrs["llm.token_count.completion"] = int(completion_tokens)
+    return _make_span("llm.call", attrs, index)
+
+
+def _stringify_tool_params(params: Any) -> str:
+    if params is None:
+        return ""
+    if isinstance(params, str):
+        return params
+    try:
+        return json.dumps(params, ensure_ascii=False)
+    except TypeError:
+        return str(params)
+
+
+def _normalize_cli_tool_name(raw_name: Any) -> str:
+    name = str(raw_name or "").strip()
+    lowered = name.replace("-", "_").replace(" ", "_").casefold()
+
+    if lowered in {"read", "readfile", "read_file", "ls", "glob", "grep"}:
+        return "read_file"
+    if lowered in {"write", "edit", "multiedit", "notebookedit", "write_file"}:
+        return "write_file"
+    if lowered in {
+        "bash",
+        "shell",
+        "terminal",
+        "exec",
+        "exec_command",
+        "shell_command",
+        "command",
+    }:
+        return "terminal"
+    if lowered in {"websearch", "web_search", "webfetch", "web_fetch", "search"}:
+        return "duckduckgo_search"
+    return lowered or "unknown"
+
+
+def _message_content_blocks(message: Any) -> list[Any]:
+    if not isinstance(message, dict):
+        return []
+    content = message.get("content", [])
+    if isinstance(content, list):
+        return content
+    if content:
+        return [content]
+    return []
+
+
+def _extract_text_from_blocks(blocks: list[Any]) -> str:
+    parts: list[str] = []
+    for block in blocks:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict):
+            text = block.get("text") or block.get("content")
+            if isinstance(text, list):
+                parts.append(_extract_text_from_blocks(text))
+            elif text:
+                parts.append(str(text))
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _event_model(event: dict[str, Any]) -> Any:
+    message = event.get("message")
+    if isinstance(message, dict):
+        return event.get("model") or message.get("model")
+    return event.get("model")
+
+
+def _event_usage(event: dict[str, Any]) -> Any:
+    message = event.get("message")
+    if isinstance(message, dict):
+        return event.get("usage") or message.get("usage")
+    return event.get("usage")
+
+
+def _parse_claude_code_events(stdout: str) -> tuple[str, list[SpanView]]:
+    spans: list[SpanView] = []
+    output_text = ""
+    step_count = 0
+    tool_spans_by_id: dict[str, SpanView] = {}
+
+    for event in _parse_json_lines(stdout):
+        event_type = str(event.get("type", ""))
+        message = event.get("message") if isinstance(event.get("message"), dict) else {}
+        blocks = _message_content_blocks(message)
+
+        if event_type == "assistant":
+            text = _extract_text_from_blocks(blocks)
+            if text:
+                output_text = text
+
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                tool_name = _normalize_cli_tool_name(block.get("name"))
+                spans.append(_make_step_span(step_count, tool_name, len(spans)))
+                tool_span = _make_tool_span(tool_name, block.get("input", {}), len(spans))
+                spans.append(tool_span)
+                tool_id = str(block.get("id") or "")
+                if tool_id:
+                    tool_spans_by_id[tool_id] = tool_span
+                step_count += 1
+
+        elif event_type == "user":
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                tool_id = str(block.get("tool_use_id") or "")
+                tool_span = tool_spans_by_id.get(tool_id)
+                if tool_span is not None:
+                    tool_span.attributes["tool.output"] = _normalize_output_content(
+                        block.get("content", "")
+                    )
+
+        if event_type == "result":
+            result = event.get("result") or event.get("output") or event.get("message")
+            if result:
+                output_text = _normalize_output_content(result)
+
+        usage_span = _make_llm_span(_event_usage(event), _event_model(event), len(spans))
+        if usage_span is not None:
+            spans.append(usage_span)
+
+    if output_text:
+        spans.append(_make_output_span(output_text, len(spans)))
+    return output_text, spans
+
+
+def _codex_payload(event: dict[str, Any]) -> dict[str, Any]:
+    msg = event.get("msg")
+    if isinstance(msg, dict):
+        merged = dict(msg)
+        merged.setdefault("type", event.get("type"))
+        return merged
+    return event
+
+
+def _codex_item(event: dict[str, Any]) -> dict[str, Any]:
+    item = event.get("item") or event.get("data")
+    return item if isinstance(item, dict) else event
+
+
+def _codex_tool_call_fields(event: dict[str, Any]) -> tuple[str, str, Any, Any]:
+    item = _codex_item(event)
+    function = item.get("function") if isinstance(item.get("function"), dict) else {}
+    tool_id = str(item.get("id") or item.get("call_id") or event.get("id") or "")
+    command = item.get("command")
+    raw_tool_name = item.get("name") or item.get("tool_name") or function.get("name")
+    tool_name = (
+        _codex_tool_name_from_command(str(command))
+        if item.get("type") == "command_execution" and command
+        else _normalize_cli_tool_name(raw_tool_name)
+    )
+    params = (
+        item.get("arguments")
+        or item.get("args")
+        or item.get("input")
+        or item.get("params")
+        or function.get("arguments")
+        or ({"command": command} if command else None)
+    )
+    output = (
+        item.get("output")
+        or item.get("aggregated_output")
+        or item.get("result")
+        or item.get("content")
+    )
+    return tool_id, tool_name, params, output
+
+
+def _codex_tool_name_from_command(command: str) -> str:
+    normalized = command.strip()
+    if not normalized:
+        return "terminal"
+
+    lowered = normalized.casefold()
+    if " -lc " in lowered:
+        try:
+            tokens = shlex.split(normalized)
+            if len(tokens) >= 3 and Path(tokens[0]).name in {"bash", "sh", "zsh"}:
+                lowered = tokens[2].casefold()
+        except ValueError:
+            pass
+
+    read_prefixes = ("cat ", "head ", "tail ", "less ", "more ", "grep ", "sed ", "awk ")
+    if lowered.startswith(read_prefixes) or " cat /" in lowered:
+        return "read_file"
+
+    if ">" in lowered or lowered.startswith(("tee ", "touch ")):
+        return "write_file"
+
+    return "terminal"
+
+
+def _codex_event_is_tool(event: dict[str, Any]) -> bool:
+    item = _codex_item(event)
+    event_type = str(event.get("type", ""))
+    item_type = str(item.get("type", ""))
+    return (
+        item_type in {"tool_call", "function_call", "command_execution"}
+        or "tool_call" in event_type
+        or "function_call" in event_type
+        or bool(item.get("tool_name"))
+    )
+
+
+def _codex_final_text(event: dict[str, Any]) -> str:
+    for key in ("last_message", "final_message", "output", "text"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    message = event.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    if isinstance(message, dict):
+        text = _extract_text_from_blocks(_message_content_blocks(message))
+        if text:
+            return text
+
+    item = _codex_item(event)
+    if str(item.get("type", "")) in {"message", "assistant_message", "agent_message"}:
+        content = item.get("content") or item.get("text")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            return _extract_text_from_blocks(content)
+    return ""
+
+
+def _parse_codex_events(stdout: str) -> tuple[str, list[SpanView]]:
+    spans: list[SpanView] = []
+    output_text = ""
+    step_count = 0
+    tool_spans_by_id: dict[str, SpanView] = {}
+
+    for raw_event in _parse_json_lines(stdout):
+        event = _codex_payload(raw_event)
+        if _codex_event_is_tool(event):
+            tool_id, tool_name, params, output = _codex_tool_call_fields(event)
+            tool_span = tool_spans_by_id.get(tool_id) if tool_id else None
+            if tool_span is None:
+                spans.append(_make_step_span(step_count, tool_name, len(spans)))
+                tool_span = _make_tool_span(tool_name, params or {}, len(spans), output=output)
+                spans.append(tool_span)
+                if tool_id:
+                    tool_spans_by_id[tool_id] = tool_span
+                step_count += 1
+            elif output is not None:
+                tool_span.attributes["tool.output"] = _normalize_output_content(output)
+
+        final_text = _codex_final_text(event)
+        if final_text:
+            output_text = final_text
+
+        usage_span = _make_llm_span(_event_usage(event), _event_model(event), len(spans))
+        if usage_span is not None:
+            spans.append(usage_span)
+
+    if output_text:
+        spans.append(_make_output_span(output_text, len(spans)))
+    return output_text, spans
 
 
 def _build_ag2_llm_config(settings: AgentLensSettings) -> Any:
