@@ -389,12 +389,14 @@ python -m agentlens.eval --scenario-id tc-001 \
 
 ## Agent Runtime
 
-内置场景目前支持两种执行后端：
+内置场景目前支持多种执行后端：
 
 | Runtime | 选择方式 | 状态 |
 |---------|----------|------|
 | LangGraph | `AGENT_FRAMEWORK=langgraph` 或 `--agent-framework langgraph` | 默认 |
 | AG2 | `AGENT_FRAMEWORK=ag2` 或 `--agent-framework ag2` | 单 agent 对齐 |
+| Claude Code | `AGENT_FRAMEWORK=claude-code` 或 `--agent-framework claude-code` | 本地 CLI adapter |
+| Codex | `AGENT_FRAMEWORK=codex` 或 `--agent-framework codex` | 本地 CLI adapter |
 
 示例：
 
@@ -405,6 +407,8 @@ python -m agentlens.eval --scenario-id tc-001
 ```
 
 当前 AG2 支持刻意限制在单 agent 的内置 preset 路径上，v1 不包含 GroupChat、handoff、A2A server 或自定义 AG2 entrypoint。
+
+Claude Code 和 Codex runtime 需要本机已登录的 CLI。AgentLens 会先从 `PATH` 查找；macOS 上 Codex 还会回退到 `/Applications/Codex.app/Contents/Resources/codex`。也可以设置 `CLAUDE_CODE_CLI_PATH` 或 `CODEX_CLI_PATH` 覆盖。使用这些 runtime 时，`AGENT_MODEL` 会直接传给 CLI 的 `--model` 参数，因此可以使用 `sonnet` 或 `gpt-5.2` 这类非 AgentLens provider 前缀的值。
 
 ## Benchmark
 
@@ -552,7 +556,7 @@ JUDGE_MODEL=gemini:gemini-2.5-flash-lite
 
 | 变量 | 用途 | 默认值 |
 |------|------|--------|
-| `AGENT_FRAMEWORK` | Agent 运行时后端（`langgraph` 或 `ag2`） | `langgraph` |
+| `AGENT_FRAMEWORK` | Agent 运行时后端（`langgraph`、`ag2`、`claude-code` 或 `codex`） | `langgraph` |
 | `AGENT_MODEL` | Agent 使用的模型 | — |
 | `JUDGE_MODEL` | L2 评分使用的模型 | — |
 | `AGENT_MAX_TOKENS` | Agent 输出 token 上限 | `2048` |

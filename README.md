@@ -388,12 +388,14 @@ Each provider validates credentials and quota before running scenarios. Failures
 
 ## Agent Runtimes
 
-AgentLens supports two execution backends for built-in scenarios:
+AgentLens supports multiple execution backends for built-in scenarios:
 
 | Runtime | Selector | Status |
 |---------|----------|--------|
 | LangGraph | `AGENT_FRAMEWORK=langgraph` or `--agent-framework langgraph` | Default |
 | AG2 | `AGENT_FRAMEWORK=ag2` or `--agent-framework ag2` | Single-agent parity |
+| Claude Code | `AGENT_FRAMEWORK=claude-code` or `--agent-framework claude-code` | Local CLI adapter |
+| Codex | `AGENT_FRAMEWORK=codex` or `--agent-framework codex` | Local CLI adapter |
 
 Example:
 
@@ -404,6 +406,8 @@ python -m agentlens.eval --scenario-id tc-001
 ```
 
 Current AG2 support is intentionally scoped to single-agent runs for the built-in presets. GroupChat, handoff, A2A server, and custom AG2 entrypoints are not included in v1.
+
+Claude Code and Codex runtimes require authenticated local CLIs. AgentLens resolves them from `PATH`; Codex also falls back to `/Applications/Codex.app/Contents/Resources/codex` on macOS. Set `CLAUDE_CODE_CLI_PATH` or `CODEX_CLI_PATH` to override. For these runtimes, `AGENT_MODEL` is passed directly to the CLI `--model` flag when set, so values such as `sonnet` or `gpt-5.2` do not use AgentLens provider prefixes.
 
 ## Benchmarks
 
@@ -551,7 +555,7 @@ Full `.env.example` is included in the repo. Notable options:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `AGENT_FRAMEWORK` | Agent runtime backend (`langgraph` or `ag2`) | `langgraph` |
+| `AGENT_FRAMEWORK` | Agent runtime backend (`langgraph`, `ag2`, `claude-code`, or `codex`) | `langgraph` |
 | `AGENT_MODEL` | Model for the agent | — |
 | `JUDGE_MODEL` | Model for L2 scoring | — |
 | `AGENT_MAX_TOKENS` | Agent output token limit | `2048` |

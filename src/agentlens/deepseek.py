@@ -7,7 +7,10 @@ from typing import Any
 import httpx
 
 from agentlens.config import AgentLensSettings
-from agentlens.model_selection import resolve_model_selection
+from agentlens.model_selection import (
+    resolve_model_selection,
+    should_resolve_agent_model_for_framework,
+)
 
 
 class DeepSeekPreflightError(RuntimeError):
@@ -119,7 +122,9 @@ def validate_deepseek_preflight(
     *,
     require_judge: bool = False,
 ) -> DeepSeekBalanceSummary | None:
-    selections = [resolve_model_selection(settings.agent_model)]
+    selections = []
+    if should_resolve_agent_model_for_framework(getattr(settings, "agent_framework", "langgraph")):
+        selections.append(resolve_model_selection(settings.agent_model))
     if require_judge:
         selections.append(resolve_model_selection(settings.judge_model))
 

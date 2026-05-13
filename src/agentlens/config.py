@@ -37,10 +37,11 @@ class AgentLensSettings(BaseSettings):
         default=DEFAULT_AGENT_MODEL,
         description=(
             "Agent model selection, for example gemini:gemini-2.5-flash, "
-            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, or zhipu:glm-4-plus"
+            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, zhipu:glm-4-plus, "
+            "or a raw CLI model when AGENT_FRAMEWORK is claude-code/codex"
         ),
     )
-    agent_framework: Literal["langgraph", "ag2"] = Field(
+    agent_framework: Literal["langgraph", "ag2", "claude-code", "codex"] = Field(
         default="langgraph",
         description="Agent runtime framework to execute scenarios with.",
     )

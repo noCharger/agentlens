@@ -63,3 +63,25 @@ def test_get_settings_helper():
     s = get_settings(_env_file=None, google_api_key="helper-key", agent_max_steps=3)
     assert s.google_api_key == "helper-key"
     assert s.agent_max_steps == 3
+
+
+def test_settings_accepts_claude_code_framework_with_raw_model():
+    s = AgentLensSettings(
+        _env_file=None,
+        agent_framework="claude-code",
+        agent_model="sonnet",
+    )
+
+    assert s.agent_framework == "claude-code"
+    assert s.agent_model == "sonnet"
+
+
+def test_settings_accepts_codex_framework_with_raw_model():
+    s = AgentLensSettings(
+        _env_file=None,
+        agent_framework="codex",
+        agent_model="gpt-5.2",
+    )
+
+    assert s.agent_framework == "codex"
+    assert s.agent_model == "gpt-5.2"
