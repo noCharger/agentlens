@@ -94,7 +94,17 @@ SWEEP_REPORT_TEMPLATE = Template("""\
   .badge-na { background: #f1f5f9; color: #64748b; }
   .regression { color: #991b1b; }
   .improvement { color: #166534; }
+  .soft-regression { color: #c2410c; }
   .section { margin: 2rem 0; }
+  .chip { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.35rem; border-radius: 3px; margin: 0.1rem 0.1rem 0.1rem 0; background: #f1f5f9; color: #475569; font-family: monospace; white-space: nowrap; }
+  .chip-minus { background: #fee2e2; color: #991b1b; }
+  .chip-plus { background: #dcfce7; color: #166534; }
+  .chip-flip-bad { background: #fee2e2; color: #991b1b; }
+  .chip-flip-good { background: #dcfce7; color: #166534; }
+  .delta-pos { color: #166534; font-weight: 600; }
+  .delta-neg { color: #991b1b; font-weight: 600; }
+  .delta-neu { color: #64748b; }
+  .perf-table td:first-child { font-weight: 500; color: #555; width: 200px; }
 </style>
 </head>
 <body>
@@ -169,12 +179,61 @@ SWEEP_REPORT_TEMPLATE = Template("""\
 <h2>Pairwise Comparison: {{ comparison.baseline_config.agent_model }} → {{ comparison.candidate_config.agent_model }}</h2>
 <p>Pass rate: <strong>{{ comparison.baseline_pass_rate }}%</strong> → <strong>{{ comparison.candidate_pass_rate }}%</strong>
   (<span class="{% if comparison.delta_pass_rate >= 0 %}improvement{% else %}regression{% endif %}">{{ '%+.1f' | format(comparison.delta_pass_rate) }}%</span>)
+  &nbsp;·&nbsp; {{ comparison.regressions | length }} regression(s)
+  &nbsp;·&nbsp; {{ comparison.improvements | length }} improvement(s)
+  {% if comparison.soft_regressions or comparison.soft_improvements %}
+  &nbsp;·&nbsp; {{ comparison.soft_regressions | length }} soft regression(s)
+  {% endif %}
 </p>
+
+{% if comparison.dimension_comparisons %}
+<h3>L2 Dimension Scores</h3>
+<table class="perf-table">
+<thead><tr><th>Dimension</th><th>{{ comparison.baseline_config.agent_model }}</th><th>{{ comparison.candidate_config.agent_model }}</th><th>Δ</th></tr></thead>
+<tbody>
+{% for d in comparison.dimension_comparisons %}
+  <tr>
+    <td>{{ d.dimension }}</td>
+    <td>{{ d.baseline_value }}</td>
+    <td>{{ d.candidate_value }}</td>
+    <td><span class="{% if d.improved %}delta-pos{% elif d.regressed %}delta-neg{% else %}delta-neu{% endif %}">{{ '%+.2f' | format(d.delta) }}</span></td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+
+<h3>Performance</h3>
+<table class="perf-table">
+<thead><tr><th>Metric</th><th>{{ comparison.baseline_config.agent_model }}</th><th>{{ comparison.candidate_config.agent_model }}</th><th>Δ</th></tr></thead>
+<tbody>
+  <tr>
+    <td>Avg steps</td>
+    <td>{{ comparison.performance.baseline_avg_steps }}</td>
+    <td>{{ comparison.performance.candidate_avg_steps }}</td>
+    <td><span class="{% if comparison.performance.step_delta < 0 %}delta-pos{% elif comparison.performance.step_delta > 0 %}delta-neg{% else %}delta-neu{% endif %}">{{ '%+.2f' | format(comparison.performance.step_delta) }}</span></td>
+  </tr>
+  <tr>
+    <td>Avg tokens</td>
+    <td>{{ comparison.performance.baseline_avg_tokens | int }}</td>
+    <td>{{ comparison.performance.candidate_avg_tokens | int }}</td>
+    <td><span class="{% if comparison.performance.token_delta < 0 %}delta-pos{% elif comparison.performance.token_delta > 0 %}delta-neg{% else %}delta-neu{% endif %}">{{ '%+.0f' | format(comparison.performance.token_delta) }}</span></td>
+  </tr>
+  {% if comparison.performance.baseline_avg_retention > 0 or comparison.performance.candidate_avg_retention > 0 %}
+  <tr>
+    <td>Avg memory retention</td>
+    <td>{{ '%.2f' | format(comparison.performance.baseline_avg_retention) }}</td>
+    <td>{{ '%.2f' | format(comparison.performance.candidate_avg_retention) }}</td>
+    <td><span class="{% if comparison.performance.retention_delta > 0.01 %}delta-pos{% elif comparison.performance.retention_delta < -0.01 %}delta-neg{% else %}delta-neu{% endif %}">{{ '%+.2f' | format(comparison.performance.retention_delta) }}</span></td>
+  </tr>
+  {% endif %}
+</tbody>
+</table>
 
 {% if comparison.regressions %}
 <h3 class="regression">Regressions ({{ comparison.regressions | length }})</h3>
 <table>
-<thead><tr><th>Scenario</th><th>Benchmark</th><th>Baseline</th><th>Candidate</th></tr></thead>
+<thead><tr><th>Scenario</th><th>Benchmark</th><th>Baseline</th><th>Candidate</th><th>L1 checks changed</th><th>Tool diff</th></tr></thead>
 <tbody>
 {% for r in comparison.regressions %}
   <tr>
@@ -182,6 +241,47 @@ SWEEP_REPORT_TEMPLATE = Template("""\
     <td>{{ r.benchmark or '—' }}</td>
     <td>{{ r.baseline_status | upper }}</td>
     <td>{{ r.candidate_status | upper }}</td>
+    <td>{% for f in r.l1_flipped %}<span class="chip {% if 'pass→fail' in f %}chip-flip-bad{% else %}chip-flip-good{% endif %}">{{ f }}</span>{% endfor %}{% if not r.l1_flipped %}—{% endif %}</td>
+    <td>{% for t in r.tools_only_baseline %}<span class="chip chip-minus">−{{ t }}</span>{% endfor %}{% for t in r.tools_only_candidate %}<span class="chip chip-plus">+{{ t }}</span>{% endfor %}{% if not r.tools_only_baseline and not r.tools_only_candidate %}—{% endif %}</td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+
+{% if comparison.soft_regressions %}
+<h3 class="soft-regression">Soft Regressions — new risk signals ({{ comparison.soft_regressions | length }})</h3>
+<p style="color:#64748b;font-size:0.85rem">These scenarios still pass but the candidate introduced risk signals that were absent in the baseline (PASSED → RISKY_SUCCESS).</p>
+<table>
+<thead><tr><th>Scenario</th><th>Benchmark</th><th>Baseline</th><th>Candidate</th><th>L1 checks changed</th><th>Tool diff</th></tr></thead>
+<tbody>
+{% for r in comparison.soft_regressions %}
+  <tr>
+    <td>{{ r.scenario_name }} <span style="color:#888;font-size:0.8rem">({{ r.scenario_id }})</span></td>
+    <td>{{ r.benchmark or '—' }}</td>
+    <td>{{ r.baseline_status | upper }}</td>
+    <td>{{ r.candidate_status | upper }}</td>
+    <td>{% for f in r.l1_flipped %}<span class="chip {% if 'pass→fail' in f %}chip-flip-bad{% else %}chip-flip-good{% endif %}">{{ f }}</span>{% endfor %}{% if not r.l1_flipped %}—{% endif %}</td>
+    <td>{% for t in r.tools_only_baseline %}<span class="chip chip-minus">−{{ t }}</span>{% endfor %}{% for t in r.tools_only_candidate %}<span class="chip chip-plus">+{{ t }}</span>{% endfor %}{% if not r.tools_only_baseline and not r.tools_only_candidate %}—{% endif %}</td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+
+{% if comparison.soft_improvements %}
+<h3 class="improvement">Soft Improvements — risk signals resolved ({{ comparison.soft_improvements | length }})</h3>
+<table>
+<thead><tr><th>Scenario</th><th>Benchmark</th><th>Baseline</th><th>Candidate</th><th>L1 checks changed</th><th>Tool diff</th></tr></thead>
+<tbody>
+{% for r in comparison.soft_improvements %}
+  <tr>
+    <td>{{ r.scenario_name }} <span style="color:#888;font-size:0.8rem">({{ r.scenario_id }})</span></td>
+    <td>{{ r.benchmark or '—' }}</td>
+    <td>{{ r.baseline_status | upper }}</td>
+    <td>{{ r.candidate_status | upper }}</td>
+    <td>{% for f in r.l1_flipped %}<span class="chip {% if 'pass→fail' in f %}chip-flip-bad{% else %}chip-flip-good{% endif %}">{{ f }}</span>{% endfor %}{% if not r.l1_flipped %}—{% endif %}</td>
+    <td>{% for t in r.tools_only_baseline %}<span class="chip chip-minus">−{{ t }}</span>{% endfor %}{% for t in r.tools_only_candidate %}<span class="chip chip-plus">+{{ t }}</span>{% endfor %}{% if not r.tools_only_baseline and not r.tools_only_candidate %}—{% endif %}</td>
   </tr>
 {% endfor %}
 </tbody>
@@ -191,7 +291,7 @@ SWEEP_REPORT_TEMPLATE = Template("""\
 {% if comparison.improvements %}
 <h3 class="improvement">Improvements ({{ comparison.improvements | length }})</h3>
 <table>
-<thead><tr><th>Scenario</th><th>Benchmark</th><th>Baseline</th><th>Candidate</th></tr></thead>
+<thead><tr><th>Scenario</th><th>Benchmark</th><th>Baseline</th><th>Candidate</th><th>L1 checks changed</th><th>Tool diff</th></tr></thead>
 <tbody>
 {% for r in comparison.improvements %}
   <tr>
@@ -199,6 +299,8 @@ SWEEP_REPORT_TEMPLATE = Template("""\
     <td>{{ r.benchmark or '—' }}</td>
     <td>{{ r.baseline_status | upper }}</td>
     <td>{{ r.candidate_status | upper }}</td>
+    <td>{% for f in r.l1_flipped %}<span class="chip {% if 'pass→fail' in f %}chip-flip-bad{% else %}chip-flip-good{% endif %}">{{ f }}</span>{% endfor %}{% if not r.l1_flipped %}—{% endif %}</td>
+    <td>{% for t in r.tools_only_baseline %}<span class="chip chip-minus">−{{ t }}</span>{% endfor %}{% for t in r.tools_only_candidate %}<span class="chip chip-plus">+{{ t }}</span>{% endfor %}{% if not r.tools_only_baseline and not r.tools_only_candidate %}—{% endif %}</td>
   </tr>
 {% endfor %}
 </tbody>
