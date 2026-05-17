@@ -38,6 +38,10 @@ from agentlens.eval.level1_deterministic.memory_retention import (
     MemoryRetentionResult,
     evaluate_memory_retention,
 )
+from agentlens.eval.level1_deterministic.output_constraints import (
+    OutputConstraintResult,
+    evaluate_output_constraints,
+)
 from agentlens.sandbox import prepare_benchmark_environment
 
 log = logging.getLogger("agentlens.eval")
@@ -129,6 +133,7 @@ class Level1Result:
     termination: TerminationResult | None = None
     safety: SafetyResult | None = None
     memory_retention: MemoryRetentionResult | None = None
+    output_constraints: OutputConstraintResult | None = None
 
     @property
     def passed(self) -> bool:
@@ -143,6 +148,8 @@ class Level1Result:
             return False
         if self.memory_retention is not None and not self.memory_retention.passed:
             return False
+        if self.output_constraints is not None and not self.output_constraints.passed:
+            return False
         return True
 
     @property
@@ -156,6 +163,8 @@ class Level1Result:
             checks["safety"] = self.safety.passed
         if self.memory_retention is not None:
             checks["memory_retention"] = self.memory_retention.passed
+        if self.output_constraints is not None:
+            checks["output_constraints"] = self.output_constraints.passed
         return checks
 
     @property
@@ -211,6 +220,10 @@ class Level1Result:
                     f"Memory: hallucinated {self.memory_retention.poison_hallucinated} "
                     "forbidden value(s)"
                 )
+
+        if self.output_constraints is not None and not self.output_constraints.passed:
+            for v in self.output_constraints.violations:
+                reasons.append(f"Constraint {v.constraint}: expected {v.expected}, got {v.actual}")
 
         return _dedupe_preserve_order(reasons)
 
@@ -367,6 +380,20 @@ def detect_risk_signals(spans: list[ReadableSpan], scenario: Scenario) -> list[s
     return signals
 
 
+def _has_any_constraint(c) -> bool:  # c: OutputConstraints
+    return bool(
+        c.required_keywords or c.forbidden_words or c.response_language
+        or c.word_count_min is not None or c.word_count_max is not None
+        or c.sentence_count_min is not None or c.sentence_count_max is not None
+        or c.paragraph_count_min is not None or c.paragraph_count_max is not None
+        or c.json_format or c.no_comma or c.all_uppercase or c.all_lowercase
+        or c.starts_with or c.ends_with
+        or c.bullet_list_count is not None or c.num_highlighted_sections is not None
+        or c.has_postscript or c.title_format or c.two_responses
+        or c.repeat_prompt or c.constrained_to
+    )
+
+
 def _extract_output_text_from_spans(spans: list[ReadableSpan]) -> str:
     """Extract agent final output from spans (mirrors execute_and_eval output extraction)."""
     for span in reversed(spans):
@@ -427,6 +454,15 @@ def run_level1_eval(
             output_text=effective_output,
             memory_anchors=scenario.memory_anchors,
             memory_poison=scenario.memory_poison,
+        )
+
+    constraints = scenario.expected.constraints
+    if _has_any_constraint(constraints):
+        effective_output = output_text or _extract_output_text_from_spans(spans)
+        result.output_constraints = evaluate_output_constraints(
+            effective_output,
+            constraints,
+            prompt=scenario.input_query,
         )
 
     return result

@@ -26,6 +26,42 @@ class ExpectedToolParam(BaseModel):
     forbidden_values: list[str] = Field(default_factory=list)
 
 
+class OutputConstraints(BaseModel):
+    """IFEval-style machine-checkable output constraints."""
+
+    # Keywords
+    required_keywords: list[str] = Field(default_factory=list)
+    forbidden_words: list[str] = Field(default_factory=list)
+
+    # Language (ISO 639-1 code, e.g. "en", "zh-cn"; requires langdetect)
+    response_language: str | None = None
+
+    # Length
+    word_count_min: int | None = None
+    word_count_max: int | None = None
+    sentence_count_min: int | None = None
+    sentence_count_max: int | None = None
+    paragraph_count_min: int | None = None
+    paragraph_count_max: int | None = None
+
+    # Format
+    json_format: bool = False
+    no_comma: bool = False
+    all_uppercase: bool = False
+    all_lowercase: bool = False
+    starts_with: str | None = None
+    ends_with: str | None = None
+
+    # Structure
+    bullet_list_count: int | None = None       # exact number of * / - bullet lines
+    num_highlighted_sections: int | None = None # exact *...*  sections
+    has_postscript: bool = False                # must contain P.S.
+    title_format: bool = False                  # must contain <<...>>
+    two_responses: bool = False                 # must contain ****** separator
+    repeat_prompt: bool = False                 # output must include the original prompt
+    constrained_to: list[str] = Field(default_factory=list)  # e.g. ["yes", "no", "maybe"]
+
+
 class ExpectedResult(BaseModel):
     tools_called: list[str] = Field(default_factory=list)
     tool_params: list[ExpectedToolParam] = Field(default_factory=list)
@@ -37,6 +73,7 @@ class ExpectedResult(BaseModel):
     max_steps_after_answer: int = 1
     safety_checks: bool = True
     forbidden_patterns: list[str] = Field(default_factory=list)
+    constraints: OutputConstraints = Field(default_factory=OutputConstraints)
 
 
 class Scenario(BaseModel):
