@@ -38,6 +38,12 @@ python -m agentlens.eval --scenario-id tc-001 --level2
 # Generate an HTML report
 python -m agentlens.eval --level2 --output report.html
 
+# Multi-model sweep (runs all models in parallel, generates unified report)
+python -m agentlens.eval \
+  --agent-model gemini:gemini-2.5-flash \
+  --agent-model deepseek:deepseek-chat \
+  --output sweep_report.html
+
 # Switch runtime backend
 python -m agentlens.eval --scenario-id tc-001 --agent-framework ag2
 ```
@@ -107,6 +113,13 @@ Pass `--output report.html` to generate a self-contained report:
 - Summary cards: total, passed, partial, risky, failed, pass rate
 - Per-scenario detail: L1 results, L2 scores and explanations, failure reasons
 - Benchmark-level aggregation when running benchmark suites
+
+**Multi-model sweep report** — when `--agent-model` is repeated, a unified sweep report is generated instead:
+
+- Per-model summary cards with pass rate, avg steps, avg tokens, and winner badge
+- Per-benchmark breakdown table (rows = benchmarks, columns = models)
+- Scenario × model grid with color-coded pass/fail cells
+- Pairwise regression/improvement section (automatically included for 2-model sweeps)
 
 ## Writing Scenarios
 
@@ -384,6 +397,19 @@ python -m agentlens.eval --scenario-id tc-001 \
   --judge-model gemini:gemini-2.5-flash-lite
 ```
 
+**Multi-model sweep** — repeat `--agent-model` to benchmark multiple providers in a single command. Each model runs in its own thread; providers have independent rate-limit pools so parallel execution is safe by default:
+
+```bash
+python -m agentlens.eval \
+  --agent-model gemini:gemini-2.5-flash \
+  --agent-model deepseek:deepseek-chat \
+  --agent-model openrouter:openai/gpt-4o-mini \
+  --benchmark toolathlon \
+  --output sweep_report.html
+```
+
+When exactly two models are specified, a pairwise comparison (regressions and improvements per scenario) is automatically included in the report.
+
 Each provider validates credentials and quota before running scenarios. Failures surface early with clear messages.
 
 ## Agent Runtimes
@@ -591,8 +617,9 @@ src/agentlens/
 ├── eval/
 │   ├── level1_deterministic/   # 7 check modules (incl. memory_retention)
 │   ├── level2_llm_judge/       # Judge + 5 optional metrics + memory_fidelity rubric
-│   ├── level3_human/           # HTML reporter
+│   ├── level3_human/           # HTML reporter (single-model + sweep)
 │   ├── runner.py               # Orchestration
+│   ├── sweep.py                # Multi-model parallel sweep orchestrator
 │   └── scenarios.py            # YAML loader + data model
 ├── evolution/           # Signal analysis + prompt evolution cycle
 ├── proxy/               # L0 HTTP MITM proxy (non-intrusive capture)
@@ -618,6 +645,17 @@ python -m agentlens.eval --scenarios path/to/dir      # Run from custom director
 python -m agentlens.eval                              # L1 only
 python -m agentlens.eval --level2                     # L1 + L2
 python -m agentlens.eval --level2 --output report.html  # L1 + L2 + L3
+
+# Multi-model sweep
+python -m agentlens.eval \
+  --agent-model gemini:gemini-2.5-flash \
+  --agent-model deepseek:deepseek-chat \
+  --output sweep_report.html                          # Unified sweep HTML report
+python -m agentlens.eval \
+  --agent-model gemini:gemini-2.5-flash \
+  --agent-model deepseek:deepseek-chat \
+  --agent-model openrouter:openai/gpt-4o-mini \
+  --benchmark toolathlon --output sweep_report.html   # 3-model sweep with benchmark
 
 # L2 metric selection
 python -m agentlens.eval --level2 --geval
@@ -650,7 +688,7 @@ python -m agentlens.core --help
 ## Development
 
 ```bash
-# Run tests (380 tests)
+# Run tests (420+ tests)
 python -m pytest
 
 # Lint

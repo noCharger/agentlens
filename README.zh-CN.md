@@ -38,6 +38,12 @@ python -m agentlens.eval --scenario-id tc-001 --level2
 # 生成 HTML 报告
 python -m agentlens.eval --level2 --output report.html
 
+# 多模型 Sweep（并行跑所有模型，生成统一报告）
+python -m agentlens.eval \
+  --agent-model gemini:gemini-2.5-flash \
+  --agent-model deepseek:deepseek-chat \
+  --output sweep_report.html
+
 # 切换运行时后端
 python -m agentlens.eval --scenario-id tc-001 --agent-framework ag2
 ```
@@ -107,6 +113,13 @@ python -m agentlens.eval --level2 --all-metrics
 - 汇总卡片：总数、通过、部分通过、有风险、失败、通过率
 - 每条场景明细：L1 结果、L2 分数和说明、失败原因
 - 运行 benchmark 套件时额外提供 benchmark 维度聚合
+
+**多模型 Sweep 报告** — 重复使用 `--agent-model` 时，生成统一的 Sweep 报告而非单模型报告：
+
+- 每个模型的汇总卡片，含通过率、平均步数、平均 token 数和最优标签
+- 按 benchmark 分组的汇总表（行 = benchmark，列 = 模型）
+- 场景 × 模型网格，单元格颜色区分 pass/fail
+- 双模型对比时自动包含逐场景的回退/改进列表
 
 ## 场景格式
 
@@ -385,6 +398,19 @@ python -m agentlens.eval --scenario-id tc-001 \
   --judge-model gemini:gemini-2.5-flash-lite
 ```
 
+**多模型 Sweep** — 重复 `--agent-model` 即可在一条命令中跨 provider 对比。每个模型跑在独立线程里，不同 provider 有各自的速率限制池，并行执行天然安全：
+
+```bash
+python -m agentlens.eval \
+  --agent-model gemini:gemini-2.5-flash \
+  --agent-model deepseek:deepseek-chat \
+  --agent-model openrouter:openai/gpt-4o-mini \
+  --benchmark toolathlon \
+  --output sweep_report.html
+```
+
+指定恰好两个模型时，报告会自动包含逐场景的双模型对比（回退与改进）。
+
 每个 provider 在开跑前都会验证 key 和额度，失败时早报错、给明确提示。
 
 ## Agent Runtime
@@ -592,8 +618,9 @@ src/agentlens/
 ├── eval/
 │   ├── level1_deterministic/   # 7 个检查模块（含 memory_retention）
 │   ├── level2_llm_judge/       # Judge + 5 个可选指标 + memory_fidelity rubric
-│   ├── level3_human/           # HTML 报告生成
+│   ├── level3_human/           # HTML 报告生成（单模型 + Sweep）
 │   ├── runner.py               # 编排层
+│   ├── sweep.py                # 多模型并行 Sweep 编排器
 │   └── scenarios.py            # YAML 加载 + 数据模型
 ├── evolution/           # 信号分析 + prompt 演化周期
 ├── proxy/               # L0 HTTP MITM 代理（非侵入式采集）
@@ -619,6 +646,17 @@ python -m agentlens.eval --scenarios path/to/dir      # 从自定义目录加载
 python -m agentlens.eval                              # 只跑 L1
 python -m agentlens.eval --level2                     # L1 + L2
 python -m agentlens.eval --level2 --output report.html  # L1 + L2 + L3
+
+# 多模型 Sweep
+python -m agentlens.eval \
+  --agent-model gemini:gemini-2.5-flash \
+  --agent-model deepseek:deepseek-chat \
+  --output sweep_report.html                          # 统一 Sweep HTML 报告
+python -m agentlens.eval \
+  --agent-model gemini:gemini-2.5-flash \
+  --agent-model deepseek:deepseek-chat \
+  --agent-model openrouter:openai/gpt-4o-mini \
+  --benchmark toolathlon --output sweep_report.html   # 三模型 + benchmark
 
 # L2 指标选择
 python -m agentlens.eval --level2 --geval
@@ -651,7 +689,7 @@ python -m agentlens.core --help
 ## 开发
 
 ```bash
-# 跑测试（380 个）
+# 跑测试（420+ 个）
 python -m pytest
 
 # Lint
