@@ -573,8 +573,26 @@ def _run_sweep_path(
 
     _print_sweep_results(sweep)
 
+    from agentlens.eval.sweep_store import compare_sweeps, load_sweep, save_sweep, snapshot_from_sweep
+
+    trend = None
+    current_snapshot = None
+
+    if getattr(args, "save_sweep", None):
+        current_snapshot = save_sweep(sweep, args.save_sweep)
+        console.print(f"\n[green]Sweep snapshot saved to {args.save_sweep}[/green]")
+
+    if getattr(args, "compare_sweep", None):
+        try:
+            old_snapshot = load_sweep(args.compare_sweep)
+            if current_snapshot is None:
+                current_snapshot = snapshot_from_sweep(sweep)
+            trend = compare_sweeps(old_snapshot, current_snapshot)
+        except Exception as exc:
+            console.print(f"[yellow]Warning: could not load comparison sweep: {exc}[/yellow]")
+
     if args.output:
-        generate_sweep_report(sweep, output_path=args.output)
+        generate_sweep_report(sweep, output_path=args.output, trend_comparison=trend)
         console.print(f"\n[green]Sweep report saved to {args.output}[/green]")
 
     for model_run in sweep.model_runs:
@@ -701,6 +719,18 @@ def main():
         help="Directory containing downloaded raw benchmark files for dynamic loading",
     )
     parser.add_argument("--output", type=Path, help="HTML report output path")
+    parser.add_argument(
+        "--save-sweep",
+        type=Path,
+        metavar="PATH",
+        help="Save sweep snapshot to JSON after the run (for later trend comparison)",
+    )
+    parser.add_argument(
+        "--compare-sweep",
+        type=Path,
+        metavar="PATH",
+        help="Load a previous sweep snapshot and include a trend section in the report",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--level2", action="store_true", help="Enable LLM-as-Judge")
     parser.add_argument(

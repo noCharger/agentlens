@@ -13,6 +13,7 @@ from agentlens.eval.benchmarks import UNASSIGNED_BENCHMARK, summarize_results_by
 
 if TYPE_CHECKING:
     from agentlens.eval.sweep import SweepResult
+    from agentlens.eval.sweep_store import SweepTrendComparison
 
 
 @dataclass
@@ -95,6 +96,15 @@ SWEEP_REPORT_TEMPLATE = Template("""\
   .regression { color: #991b1b; }
   .improvement { color: #166534; }
   .section { margin: 2rem 0; }
+  .delta-pos { color: #166534; font-weight: 600; }
+  .delta-neg { color: #991b1b; font-weight: 600; }
+  .delta-neu { color: #64748b; }
+  .rank-badge { display: inline-block; background: #1a1a2e; color: white; font-size: 0.75rem; font-weight: bold; width: 1.5rem; height: 1.5rem; border-radius: 50%; text-align: center; line-height: 1.5rem; margin-right: 0.4rem; }
+  .rank-1 { background: #ca8a04; }
+  .hth-win { background: #dcfce7; color: #166534; font-weight: 600; }
+  .hth-loss { background: #fee2e2; color: #991b1b; }
+  .hth-self { background: #f1f5f9; color: #94a3b8; text-align: center; }
+  .trend-new { font-size: 0.78rem; color: #64748b; }
 </style>
 </head>
 <body>
@@ -111,6 +121,132 @@ SWEEP_REPORT_TEMPLATE = Template("""\
   </div>
 {% endfor %}
 </div>
+
+{% if sweep_ranking and sweep_ranking.rankings | length >= 3 %}
+<div class="section">
+<h2>Rankings</h2>
+<table>
+<thead>
+  <tr>
+    <th>Rank</th>
+    <th>Model</th>
+    <th>Pass Rate</th>
+    <th>Head-to-Head Score</th>
+  </tr>
+</thead>
+<tbody>
+{% for r in sweep_ranking.rankings %}
+  <tr>
+    <td><span class="rank-badge {% if r.rank == 1 %}rank-1{% endif %}">{{ r.rank }}</span></td>
+    <td>{{ r.agent_model }}</td>
+    <td>{{ r.pass_rate }}%</td>
+    <td>{{ r.condorcet_score }} win(s) of {{ sweep_ranking.rankings | length - 1 }}</td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+
+<h3>Head-to-Head Matrix</h3>
+<table>
+<thead>
+  <tr>
+    <th></th>
+    {% for r in sweep_ranking.rankings %}<th style="font-size:0.8rem;word-break:break-all">{{ r.agent_model }}</th>{% endfor %}
+  </tr>
+</thead>
+<tbody>
+{% for row_r in sweep_ranking.rankings %}
+  <tr>
+    <td style="font-size:0.8rem;word-break:break-all;font-weight:500">{{ row_r.agent_model }}</td>
+    {% for col_r in sweep_ranking.rankings %}
+      {% if row_r.agent_model == col_r.agent_model %}
+        <td class="hth-self">—</td>
+      {% else %}
+        {% set rec = None %}
+        {% for h in sweep_ranking.head_to_head %}
+          {% if h.model_a == row_r.agent_model and h.model_b == col_r.agent_model %}
+            {% set rec = h %}{% set wins = h.wins_a %}{% set losses = h.wins_b %}
+          {% elif h.model_b == row_r.agent_model and h.model_a == col_r.agent_model %}
+            {% set rec = h %}{% set wins = h.wins_b %}{% set losses = h.wins_a %}
+          {% endif %}
+        {% endfor %}
+        {% if rec %}
+          <td class="{% if wins > losses %}hth-win{% elif losses > wins %}hth-loss{% else %}delta-neu{% endif %}">
+            {{ wins }}W / {{ losses }}L / {{ rec.ties }}T
+          </td>
+        {% else %}
+          <td class="hth-self">—</td>
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% if sweep_ranking.benchmark_winners %}
+<h3>Per-Benchmark Leader</h3>
+<table>
+<thead><tr><th>Benchmark</th><th>Leader</th></tr></thead>
+<tbody>
+{% for bm, winner in sweep_ranking.benchmark_winners.items() %}
+  <tr><td>{{ bm }}</td><td>{{ winner }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+</div>
+{% endif %}
+
+{% if trend %}
+<div class="section">
+<h2>Trend vs Previous Sweep</h2>
+<p style="color:#64748b;font-size:0.85rem">
+  Comparing sweep <code>{{ trend.candidate_sweep_id }}</code> ({{ trend.candidate_timestamp }})
+  against <code>{{ trend.baseline_sweep_id }}</code> ({{ trend.baseline_timestamp }}).
+</p>
+<table>
+<thead>
+  <tr>
+    <th>Model</th>
+    <th>Previous</th>
+    <th>Current</th>
+    <th>Δ</th>
+    <th>New regressions</th>
+    <th>New improvements</th>
+  </tr>
+</thead>
+<tbody>
+{% for t in trend.model_trends %}
+  <tr>
+    <td>{{ t.agent_model }}</td>
+    <td>{{ t.baseline_pass_rate }}%</td>
+    <td>{{ t.candidate_pass_rate }}%</td>
+    <td><span class="{% if t.delta_pass_rate > 0 %}delta-pos{% elif t.delta_pass_rate < 0 %}delta-neg{% else %}delta-neu{% endif %}">{{ '%+.1f' | format(t.delta_pass_rate) }}%</span></td>
+    <td>
+      {% if t.new_regressions %}
+        <span class="regression">{{ t.new_regressions | length }}</span>
+        <span class="trend-new">({{ t.new_regressions | join(', ') }})</span>
+      {% else %}—{% endif %}
+    </td>
+    <td>
+      {% if t.new_improvements %}
+        <span class="improvement">{{ t.new_improvements | length }}</span>
+        <span class="trend-new">({{ t.new_improvements | join(', ') }})</span>
+      {% else %}—{% endif %}
+    </td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+{% if trend.new_models %}
+<p><strong>New models:</strong> {{ trend.new_models | join(', ') }}</p>
+{% endif %}
+{% if trend.dropped_models %}
+<p><strong>Dropped models:</strong> {{ trend.dropped_models | join(', ') }}</p>
+{% endif %}
+</div>
+{% endif %}
 
 {% if all_benchmarks %}
 <div class="section">
@@ -212,7 +348,11 @@ SWEEP_REPORT_TEMPLATE = Template("""\
 """)
 
 
-def generate_sweep_report(sweep: SweepResult, output_path: Path | None = None) -> str:
+def generate_sweep_report(
+    sweep: SweepResult,
+    output_path: Path | None = None,
+    trend_comparison: SweepTrendComparison | None = None,
+) -> str:
     model_labels = [run.agent_model for run in sweep.model_runs]
     ranked_runs = sweep.ranked_models
 
@@ -229,6 +369,7 @@ def generate_sweep_report(sweep: SweepResult, output_path: Path | None = None) -
 
     all_benchmarks = sorted(all_benchmark_set)
     grid = build_scenario_grid(sweep)
+    sweep_ranking = sweep.ranking if len(sweep.model_runs) >= 2 else None
 
     html = SWEEP_REPORT_TEMPLATE.render(
         sweep_id=sweep.sweep_id,
@@ -239,6 +380,8 @@ def generate_sweep_report(sweep: SweepResult, output_path: Path | None = None) -
         all_benchmarks=all_benchmarks,
         grid=grid,
         comparison=sweep.pairwise_comparison,
+        sweep_ranking=sweep_ranking,
+        trend=trend_comparison,
     )
 
     if output_path:
