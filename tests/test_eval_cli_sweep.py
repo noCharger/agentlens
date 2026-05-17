@@ -103,7 +103,7 @@ def test_sweep_cli_with_output_calls_generate_sweep_report(monkeypatch, tmp_path
         model_runs = [ModelRun(agent_model=m, results=[]) for m in models]
         return SweepResult(sweep_id="abc", model_runs=model_runs)
 
-    def fake_generate_sweep_report(sweep, output_path=None):
+    def fake_generate_sweep_report(sweep, output_path=None, trend_comparison=None):
         report_calls.append({"output_path": output_path})
         if output_path:
             output_path.parent.mkdir(parents=True, exist_ok=True)
