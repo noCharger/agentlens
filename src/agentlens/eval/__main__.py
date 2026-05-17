@@ -13,6 +13,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agentlens.config import AgentLensSettings
 
 from rich.console import Console
 from rich.table import Table
@@ -423,6 +427,270 @@ def _handle_platform_outputs(args, results, settings, *, dataset_version=None) -
         console.print(f"[green]Platform records stored in SQLite {database_path}[/green]")
 
 
+def _run_single_model_path(args, scenarios, settings, meter_provider, dataset_version) -> None:
+    agent_framework = getattr(settings, "agent_framework", "langgraph")
+    console.print(
+        f"\nRunning [bold]{len(scenarios)}[/bold] scenarios with "
+        f"[cyan]{settings.agent_model}[/cyan] via [magenta]{agent_framework}[/magenta]"
+    )
+    if args.level2:
+        console.print(f"L2 judge: [cyan]{settings.judge_model}[/cyan]")
+    console.print()
+
+    use_geval = args.geval or args.all_metrics or settings.judge_use_geval
+    use_task_completion = args.task_completion or args.all_metrics or settings.judge_task_completion
+    use_answer_relevancy = args.answer_relevancy or args.all_metrics or settings.judge_answer_relevancy
+    use_hallucination = args.hallucination or args.all_metrics or settings.judge_hallucination
+    use_faithfulness = args.faithfulness or args.all_metrics or settings.judge_faithfulness
+
+    results: list[EvalResult] = []
+    interrupted_by_user = False
+    for i, scenario in enumerate(scenarios, 1):
+        console.print(f"[{i}/{len(scenarios)}] [cyan]{scenario.id}[/cyan]: {scenario.name}...", end=" ")
+
+        try:
+            result = execute_and_eval(
+                scenario=scenario, settings=settings,
+                preset=args.preset, with_level2=args.level2,
+                use_geval=use_geval,
+                task_completion=use_task_completion,
+                answer_relevancy=use_answer_relevancy,
+                hallucination=use_hallucination,
+                faithfulness=use_faithfulness,
+            )
+        except KeyboardInterrupt:
+            interrupted_by_user = True
+            console.print("[yellow]INTERRUPTED[/yellow]")
+            console.print(
+                f"  [yellow]Interrupted by user (Ctrl+C). "
+                f"Keeping {len(results)} completed result(s) for reporting.[/yellow]"
+            )
+            break
+        except QuotaExhaustedError:
+            console.print("[red]QUOTA EXHAUSTED[/red]")
+            remaining = [s.id for s in scenarios[i:]]
+            if remaining:
+                console.print(f"  [yellow]Skipping {len(remaining)}: {', '.join(remaining)}[/yellow]")
+            break
+
+        results.append(result)
+        if result.passed:
+            console.print("[green]PASS[/green]")
+        else:
+            console.print("[red]FAIL[/red]")
+            if result.error:
+                console.print(f"  [dim]{result.error}[/dim]")
+            elif args.level2 and result.level2_scores and result.scenario.evaluation_mode == "llm_judge":
+                scored = {k: v for k, v in result.level2_scores.items() if v >= 0}
+                if scored:
+                    details = ", ".join(f"{dim}={score:.1f}" for dim, score in scored.items())
+                    overall = result.judge_overall_score
+                    overall_text = f"{overall:.1f}" if overall is not None else "n/a"
+                    console.print(
+                        "  [dim]L2 below threshold: "
+                        f"overall={overall_text}, threshold={result.scenario.judge_threshold:.1f}, "
+                        f"details=({details})[/dim]"
+                    )
+            if result.level1.failure_reasons:
+                for reason in result.level1.failure_reasons[:3]:
+                    console.print(f"  [dim]L1: {reason}[/dim]")
+            if result.level2_reason_lines:
+                for reason in result.level2_reason_lines[:2]:
+                    console.print(f"  [dim]Judge: {reason}[/dim]")
+
+    console.print()
+    _print_results(results)
+
+    if meter_provider:
+        try:
+            meter_provider.force_flush()
+            meter_provider.shutdown()
+        except Exception:
+            pass
+
+    if args.output:
+        generate_report(results, output_path=args.output)
+        status = "partial report" if interrupted_by_user else "report"
+        console.print(f"\n[green]{status.capitalize()} saved to {args.output}[/green]")
+
+    _handle_platform_outputs(args, results, settings, dataset_version=dataset_version)
+
+
+def _run_sweep_path(
+    args,
+    scenarios,
+    agent_models: list[str],
+    settings_factory,
+    settings,
+    dataset_version,
+) -> None:
+    from rich.progress import BarColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
+
+    from agentlens.eval.sweep import run_sweep
+    from agentlens.eval.level3_human.sweep_reporter import generate_sweep_report
+
+    n = len(scenarios)
+    console.print(
+        f"\n[bold]Sweep:[/bold] {len(agent_models)} models × {n} scenarios in parallel"
+    )
+    console.print(f"  {' | '.join(f'[cyan]{m}[/cyan]' for m in agent_models)}\n")
+
+    progress_tasks: dict[str, TaskID] = {}
+
+    use_geval = args.geval or args.all_metrics or settings.judge_use_geval
+    use_task_completion = args.task_completion or args.all_metrics or settings.judge_task_completion
+    use_answer_relevancy = args.answer_relevancy or args.all_metrics or settings.judge_answer_relevancy
+    use_hallucination = args.hallucination or args.all_metrics or settings.judge_hallucination
+    use_faithfulness = args.faithfulness or args.all_metrics or settings.judge_faithfulness
+
+    with Progress(
+        TextColumn("[cyan]{task.description:<40}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        for model in agent_models:
+            progress_tasks[model] = progress.add_task(model, total=n)
+
+        def on_scenario_complete(model: str, result: EvalResult) -> None:
+            progress.advance(progress_tasks[model])
+
+        sweep = run_sweep(
+            models=agent_models,
+            scenarios=scenarios,
+            settings_factory=settings_factory,
+            preset=args.preset,
+            with_level2=args.level2,
+            use_geval=use_geval,
+            task_completion=use_task_completion,
+            answer_relevancy=use_answer_relevancy,
+            hallucination=use_hallucination,
+            faithfulness=use_faithfulness,
+            on_scenario_complete=on_scenario_complete,
+        )
+
+    _print_sweep_results(sweep)
+
+    if args.output:
+        generate_sweep_report(sweep, output_path=args.output)
+        console.print(f"\n[green]Sweep report saved to {args.output}[/green]")
+
+    for model_run in sweep.model_runs:
+        _handle_platform_outputs_for_model_run(
+            args, model_run, settings, sweep.sweep_id, dataset_version=dataset_version
+        )
+
+
+def _print_sweep_results(sweep) -> None:
+
+    summary_table = Table(title="Sweep Results")
+    summary_table.add_column("Model", style="cyan")
+    summary_table.add_column("Scenarios", justify="right")
+    summary_table.add_column("Passed", justify="right")
+    summary_table.add_column("Pass Rate", justify="right")
+    summary_table.add_column("Avg Steps", justify="right")
+    summary_table.add_column("Avg Tokens", justify="right")
+
+    for run in sweep.ranked_models:
+        summary_table.add_row(
+            run.agent_model,
+            str(len(run.results)),
+            str(sum(1 for r in run.results if r.passed)),
+            f"{run.pass_rate}%",
+            str(run.avg_steps),
+            str(int(run.avg_tokens)),
+        )
+
+    console.print(summary_table)
+
+    if sweep.pairwise_comparison:
+        cmp = sweep.pairwise_comparison
+        delta = cmp.delta_pass_rate
+        color = "green" if delta >= 0 else "red"
+        console.print(
+            f"\nPass rate delta: [{color}]{delta:+.1f}%[/{color}]  "
+            f"({cmp.baseline_config.agent_model} → {cmp.candidate_config.agent_model})"
+        )
+        if cmp.regressions:
+            console.print(f"  [red]Regressions: {len(cmp.regressions)}[/red]")
+        if cmp.improvements:
+            console.print(f"  [green]Improvements: {len(cmp.improvements)}[/green]")
+
+
+def _handle_platform_outputs_for_model_run(
+    args,
+    model_run,
+    settings,
+    sweep_id: str,
+    *,
+    dataset_version=None,
+) -> None:
+    if not args.platform_export and not args.platform_store and not args.platform_sqlite:
+        return
+
+    from agentlens.core.exporters import (
+        build_closed_loop_snapshot,
+        write_closed_loop_snapshot,
+    )
+
+    model_label = model_run.agent_model.split(":", 1)[-1].replace("/", "-")
+    base_run_name = _resolve_platform_run_name(args)
+
+    snapshot = build_closed_loop_snapshot(
+        model_run.results,
+        dataset_name=_resolve_platform_dataset_name(args),
+        run_name=f"{base_run_name}:{model_label}",
+        source="cli",
+        agent_framework=getattr(settings, "agent_framework", "langgraph"),
+        agent_model=model_run.agent_model,
+        judge_model=settings.judge_model if args.level2 else "",
+        dataset_record=dataset_version,
+    )
+    snapshot.eval_run.metadata["sweep_id"] = sweep_id
+    snapshot.eval_run.metadata["sweep_model_count"] = len(args.agent_model)
+
+    if args.platform_export:
+        stem = args.platform_export.stem
+        suffix = args.platform_export.suffix
+        path = args.platform_export.with_name(f"{stem}_{model_label}{suffix}")
+        write_closed_loop_snapshot(snapshot, path)
+        console.print(f"[green]Platform snapshot saved to {path}[/green]")
+
+    if args.platform_store:
+        from agentlens.core.repository import FileCoreRepository
+
+        repository = FileCoreRepository(args.platform_store)
+        stored = repository.save_snapshot(
+            project_name=_resolve_platform_project_name(args),
+            project_slug=args.platform_project_slug,
+            snapshot=snapshot,
+            idempotency_key=(
+                f"{args.platform_idempotency_key}:{model_label}"
+                if args.platform_idempotency_key
+                else None
+            ),
+        )
+        console.print(f"[green]Platform records stored in {stored.project_dir}[/green]")
+
+    if args.platform_sqlite:
+        from agentlens.core.sqlite_repository import SQLiteCoreRepository
+
+        repository = SQLiteCoreRepository(args.platform_sqlite)
+        database_path = repository.save_snapshot(
+            project_name=_resolve_platform_project_name(args),
+            project_slug=args.platform_project_slug,
+            snapshot=snapshot,
+            idempotency_key=(
+                f"{args.platform_idempotency_key}:{model_label}"
+                if args.platform_idempotency_key
+                else None
+            ),
+        )
+        console.print(f"[green]Platform records stored in SQLite {database_path}[/green]")
+
+
 def main():
     parser = argparse.ArgumentParser(description="AgentLens Eval Runner")
     parser.add_argument("--scenarios", type=Path, default=Path("src/agentlens/scenarios"))
@@ -437,11 +705,14 @@ def main():
     parser.add_argument("--level2", action="store_true", help="Enable LLM-as-Judge")
     parser.add_argument(
         "--agent-model",
-        type=str,
+        action="append",
+        default=[],
+        dest="agent_model",
+        metavar="MODEL",
         help=(
-            "Override agent model, for example gemini:gemini-2.5-flash, "
-            "deepseek:deepseek-chat, openrouter:openai/gpt-4o-mini, zhipu:glm-4-plus, "
-            "or a raw CLI model for claude-code/codex"
+            "Override agent model (repeat for a multi-model sweep), e.g. "
+            "gemini:gemini-2.5-flash, deepseek:deepseek-chat, "
+            "openrouter:openai/gpt-4o-mini, zhipu:glm-4-plus"
         ),
     )
     parser.add_argument(
@@ -556,16 +827,30 @@ def main():
 
     _persist_runtime_dataset_version(args, dataset_version)
 
+    agent_models: list[str] = args.agent_model  # always a list; empty = use settings default
+    is_sweep = len(agent_models) >= 2
+
     try:
         from agentlens.config import get_settings
-        settings_overrides = {}
-        if args.agent_model:
-            settings_overrides["agent_model"] = args.agent_model
+
+        base_overrides: dict[str, str] = {}
         if args.agent_framework:
-            settings_overrides["agent_framework"] = args.agent_framework
+            base_overrides["agent_framework"] = args.agent_framework
         if args.judge_model:
-            settings_overrides["judge_model"] = args.judge_model
-        settings = get_settings(**settings_overrides)
+            base_overrides["judge_model"] = args.judge_model
+
+        def _settings_factory(model: str) -> "AgentLensSettings":
+            overrides = dict(base_overrides)
+            overrides["agent_model"] = model
+            return get_settings(**overrides)
+
+        if is_sweep:
+            settings = _settings_factory(agent_models[0])
+        else:
+            overrides = dict(base_overrides)
+            if agent_models:
+                overrides["agent_model"] = agent_models[0]
+            settings = get_settings(**overrides)
     except Exception as e:
         console.print(f"[red]Failed to load settings: {e}[/red]")
         console.print(
@@ -619,92 +904,10 @@ def main():
             f"[dim]Zhipu key check passed ({zhipu_summary.formatted_status})[/dim]"
         )
 
-    agent_framework = getattr(settings, "agent_framework", "langgraph")
-    console.print(
-        f"\nRunning [bold]{len(scenarios)}[/bold] scenarios with "
-        f"[cyan]{settings.agent_model}[/cyan] via [magenta]{agent_framework}[/magenta]"
-    )
-    if args.level2:
-        console.print(f"L2 judge: [cyan]{settings.judge_model}[/cyan]")
-    console.print()
-
-    results: list[EvalResult] = []
-    interrupted_by_user = False
-    for i, scenario in enumerate(scenarios, 1):
-        console.print(f"[{i}/{len(scenarios)}] [cyan]{scenario.id}[/cyan]: {scenario.name}...", end=" ")
-
-        use_geval = args.geval or args.all_metrics or settings.judge_use_geval
-        use_task_completion = args.task_completion or args.all_metrics or settings.judge_task_completion
-        use_answer_relevancy = args.answer_relevancy or args.all_metrics or settings.judge_answer_relevancy
-        use_hallucination = args.hallucination or args.all_metrics or settings.judge_hallucination
-        use_faithfulness = args.faithfulness or args.all_metrics or settings.judge_faithfulness
-
-        try:
-            result = execute_and_eval(
-                scenario=scenario, settings=settings,
-                preset=args.preset, with_level2=args.level2,
-                use_geval=use_geval,
-                task_completion=use_task_completion,
-                answer_relevancy=use_answer_relevancy,
-                hallucination=use_hallucination,
-                faithfulness=use_faithfulness,
-            )
-        except KeyboardInterrupt:
-            interrupted_by_user = True
-            console.print("[yellow]INTERRUPTED[/yellow]")
-            console.print(
-                f"  [yellow]Interrupted by user (Ctrl+C). "
-                f"Keeping {len(results)} completed result(s) for reporting.[/yellow]"
-            )
-            break
-        except QuotaExhaustedError:
-            console.print("[red]QUOTA EXHAUSTED[/red]")
-            remaining = [s.id for s in scenarios[i:]]
-            if remaining:
-                console.print(f"  [yellow]Skipping {len(remaining)}: {', '.join(remaining)}[/yellow]")
-            break
-
-        results.append(result)
-        if result.passed:
-            console.print("[green]PASS[/green]")
-        else:
-            console.print("[red]FAIL[/red]")
-            if result.error:
-                console.print(f"  [dim]{result.error}[/dim]")
-            elif args.level2 and result.level2_scores and result.scenario.evaluation_mode == "llm_judge":
-                scored = {k: v for k, v in result.level2_scores.items() if v >= 0}
-                if scored:
-                    details = ", ".join(f"{dim}={score:.1f}" for dim, score in scored.items())
-                    overall = result.judge_overall_score
-                    overall_text = f"{overall:.1f}" if overall is not None else "n/a"
-                    console.print(
-                        "  [dim]L2 below threshold: "
-                        f"overall={overall_text}, threshold={result.scenario.judge_threshold:.1f}, "
-                        f"details=({details})[/dim]"
-                    )
-            if result.level1.failure_reasons:
-                for reason in result.level1.failure_reasons[:3]:
-                    console.print(f"  [dim]L1: {reason}[/dim]")
-            if result.level2_reason_lines:
-                for reason in result.level2_reason_lines[:2]:
-                    console.print(f"  [dim]Judge: {reason}[/dim]")
-
-    console.print()
-    _print_results(results)
-
-    if meter_provider:
-        try:
-            meter_provider.force_flush()
-            meter_provider.shutdown()
-        except Exception:
-            pass
-
-    if args.output:
-        generate_report(results, output_path=args.output)
-        status = "partial report" if interrupted_by_user else "report"
-        console.print(f"\n[green]{status.capitalize()} saved to {args.output}[/green]")
-
-    _handle_platform_outputs(args, results, settings, dataset_version=dataset_version)
+    if is_sweep:
+        _run_sweep_path(args, scenarios, agent_models, _settings_factory, settings, dataset_version)
+    else:
+        _run_single_model_path(args, scenarios, settings, meter_provider, dataset_version)
 
 
 if __name__ == "__main__":
